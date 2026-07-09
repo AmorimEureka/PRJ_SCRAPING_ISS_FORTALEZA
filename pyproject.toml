@@ -1,0 +1,21 @@
+[project]
+name = "nfs-fortaleza-dlt"
+version = "0.1.0"
+description = "Pipeline dlt para baixar XML de NFS-e Fortaleza e carregar campos fiscais no Postgres."
+requires-python = ">=3.12"
+dependencies = [
+    "dlt[postgres]>=1.28.1",
+    "python-dotenv>=1.2.2",
+    "rich>=15.0.0",
+    "typer>=0.26.8",
+]
+
+[project.scripts]
+nfs-fortaleza = "nfs_fortaleza.cli:app"
+
+[build-system]
+requires = ["setuptools>=83.0.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]

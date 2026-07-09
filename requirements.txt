@@ -1,0 +1,4 @@
+dlt[postgres]>=1.28.1
+python-dotenv>=1.2.2
+rich>=15.0.0
+typer>=0.26.8
