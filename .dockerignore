@@ -1,0 +1,17 @@
+.git
+.venv
+.env
+airflow_settings.yaml
+.artifacts
+.pytest_cache
+.mypy_cache
+.ruff_cache
+__pycache__
+*.py[cod]
+*.egg-info
+airflow.db
+airflow.cfg
+logs
+data
+downloads
+NOTAS FISCAIS.xlsx

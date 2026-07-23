@@ -9,4 +9,9 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 .env
-
+airflow_settings.yaml
+airflow.db
+airflow.cfg
+logs/
+data/
+NOTAS FISCAIS.xlsx

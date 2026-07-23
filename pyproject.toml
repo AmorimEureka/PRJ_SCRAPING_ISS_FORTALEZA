@@ -5,9 +5,16 @@ description = "Pipeline dlt para baixar XML de NFS-e Fortaleza e carregar campos
 requires-python = ">=3.12"
 dependencies = [
     "dlt[postgres]>=1.28.1",
+    "openpyxl>=3.1.5",
     "python-dotenv>=1.2.2",
-    "rich>=15.0.0",
+    "rich>=13.9.4,<14.0.0",
     "typer>=0.26.8",
+]
+
+[project.optional-dependencies]
+airflow = [
+    "apache-airflow-providers-postgres>=5.14.0,<7.0.0",
+    "psycopg2-binary>=2.9.10",
 ]
 
 [project.scripts]

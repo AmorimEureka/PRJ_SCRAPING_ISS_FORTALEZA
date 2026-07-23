@@ -1,0 +1,6 @@
+project:
+  name: prj-web-nfs
+postgres:
+  port: 5433
+webserver:
+  port: 8082
