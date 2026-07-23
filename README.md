@@ -47,7 +47,6 @@ operacional ficam separados nas seções de cada funcionalidade.
 - Docker Engine;
 - Astro CLI;
 - PostgreSQL acessível pelos containers;
-- credenciais válidas do portal ISS Fortaleza.
 
 ### Estrutura do projeto
 
@@ -299,6 +298,20 @@ flowchart TD
         LOTE -- "Sim" --> LOTE_OK["Processo concluído"]
         LOTE -- "Não" --> LOTE_ERRO["Processo requer atenção"]
     end
+
+    classDef origem fill:#172033,stroke:#d9e2f2,color:#ffffff,stroke-width:1.5px;
+    classDef processo fill:#1d2738,stroke:#cbd5e1,color:#ffffff,stroke-width:1.5px;
+    classDef decisao fill:#4a3418,stroke:#f4c56a,color:#ffffff,stroke-width:1.5px;
+    classDef sucesso fill:#123b2a,stroke:#70d6a0,color:#ffffff,stroke-width:1.5px;
+    classDef falha fill:#471f25,stroke:#f08a96,color:#ffffff,stroke-width:1.5px;
+    classDef regra fill:#2a2d33,stroke:#9ca3af,color:#ffffff,stroke-dasharray: 4 3;
+
+    class INICIO,GRUPO,AUTOMACAO origem;
+    class BUSCA,ANDAMENTO,ACESSO,EMPRESA,EMITIR,CLIENTE,CADASTRO,SERVICO,VALOR,VALIDAR,CONFIRMAR,PDF processo;
+    class PRONTA,DADOS,TOMADOR,CAMPOS,EMITIDA,LOTE decisao;
+    class SUCESSO,LOTE_OK sucesso;
+    class ERRO,FALHA,FORA,LOTE_ERRO falha;
+    class REGRAS regra;
 ```
 
 Os IDs recebidos definem somente o escopo. Antes de acessar a Prefeitura, a
