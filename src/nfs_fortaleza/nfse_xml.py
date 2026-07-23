@@ -20,6 +20,29 @@ from nfs_fortaleza.periods import DateRangePeriod, MonthPeriod
 QueryPeriod = MonthPeriod | DateRangePeriod
 
 
+def infer_nfse_period(path: Path) -> MonthPeriod:
+    """Infer the monthly period from the competence or issue date in an XML/ZIP."""
+    content = path.read_bytes()
+    periods: set[MonthPeriod] = set()
+
+    for _xml_name, xml_content in _iter_xml_documents(path.name, content):
+        root = ET.fromstring(xml_content)
+        for node in _iter_nfse_nodes(root):
+            record = _mapped_record(node)
+            for value in (record.get("competencia_nfse"), record.get("data_hora")):
+                period = _month_period_from_xml_value(value)
+                if period:
+                    periods.add(period)
+                    break
+
+    if not periods:
+        raise ValueError(f"Nao foi possivel identificar a competencia no XML/ZIP {path}.")
+    if len(periods) > 1:
+        labels = ", ".join(sorted(period.label for period in periods))
+        raise ValueError(f"O XML/ZIP {path} contem NFS-e de competencias diferentes: {labels}.")
+    return next(iter(periods))
+
+
 def nfse_xml_resource(
     path: Path,
     competencia: QueryPeriod,
@@ -76,6 +99,25 @@ def _iter_xml_documents(file_name: str, content: bytes) -> Iterator[tuple[str, b
                     yield Path(member).name, archive.read(member)
         return
     yield file_name, content
+
+
+def _month_period_from_xml_value(value: Any) -> MonthPeriod | None:
+    if value is None:
+        return None
+    raw = str(value).strip()
+
+    match = re.search(r"\b(\d{4})-(\d{1,2})(?:-\d{1,2})?\b", raw)
+    if match:
+        return MonthPeriod(year=int(match.group(1)), month=int(match.group(2)))
+
+    match = re.search(r"\b(\d{1,2})/(\d{4})\b", raw)
+    if match:
+        return MonthPeriod(year=int(match.group(2)), month=int(match.group(1)))
+
+    match = re.fullmatch(r"(\d{4})(\d{2})(?:\d{2})?", raw)
+    if match:
+        return MonthPeriod(year=int(match.group(1)), month=int(match.group(2)))
+    return None
 
 
 def _iter_nfse_nodes(root: ET.Element) -> list[ET.Element]:

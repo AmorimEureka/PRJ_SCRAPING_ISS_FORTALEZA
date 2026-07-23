@@ -23,6 +23,10 @@ class PeriodWithoutInvoicesError(RuntimeError):
     """Raised when the NFS-e query has no result for the requested period."""
 
 
+class InscricaoNotFoundError(RuntimeError):
+    """Raised when the requested CNPJ is not available to the logged-in user."""
+
+
 @dataclass(frozen=True)
 class PortalOptions:
     downloads_dir: Path = DEFAULT_DOWNLOADS_DIR
@@ -76,6 +80,21 @@ class PortalClient:
         raise PeriodWithoutInvoicesError(
             "Nenhuma NFS-e encontrada para o periodo consultado nas inscricoes: " + "; ".join(ignored)
         )
+
+    def export_nfse(self, cnpj: str, numero_nfse: str) -> list[Path]:
+        """Export one NFS-e selected by issuer CNPJ and invoice number."""
+        self.options.downloads_dir.mkdir(parents=True, exist_ok=True)
+        self.options.artifacts_dir.mkdir(parents=True, exist_ok=True)
+
+        session = self._login_dlt_session()
+        rows = self._available_inscricoes(session)
+        selected: InscricaoRow | None = None
+        if rows:
+            selected = _find_inscricao_by_cnpj(rows, cnpj)
+            home = self._request_get(session, self.settings.portal_page("home.seam"))
+            self._select_inscricao(session, home, selected)
+
+        return [self._export_nfse_with_requests(session, cnpj, numero_nfse, selected)]
 
     def _login_dlt_session(self) -> Session:
         session = Session()
@@ -259,10 +278,10 @@ class PortalClient:
                     self._download_xml_with_requests(
                         session,
                         query_url,
-                        competencia,
                         current_view_state,
                         row_index,
                         file_name,
+                        self._form_payload(competencia, current_view_state),
                     )
                 )
 
@@ -280,6 +299,100 @@ class PortalClient:
         if len(downloaded) == 1:
             return downloaded[0]
         return self._zip_downloads(downloaded, f"{_download_prefix(competencia, inscricao)}.zip")
+
+    def _export_nfse_with_requests(
+        self,
+        session: Session,
+        cnpj: str,
+        numero_nfse: str,
+        inscricao: InscricaoRow | None = None,
+    ) -> Path:
+        query_response = self._open_nfse_query(session)
+        query_url = query_response.url
+        html = query_response.text
+        if "Consultar NFS-e" not in html:
+            debug = self._save_http_artifact("consulta_numero_nao_abriu", html)
+            raise RuntimeError(f"Tela Consultar NFS-e nao abriu. Debug salvo em {debug}")
+        view_state = _extract_view_state(html)
+
+        view_state = self._ajax_post(
+            session,
+            query_url,
+            {
+                "AJAXREQUEST": "_viewRoot",
+                "consultarnfseForm": "consultarnfseForm",
+                "consultarnfseForm:opTipoRelatorio": "1",
+                "consultarnfseForm:numNfse": "",
+                "javax.faces.ViewState": view_state,
+                "consultarnfseForm:j_id170": "consultarnfseForm:j_id170",
+                "AJAX:EVENTS_COUNT": "1",
+            },
+            view_state,
+        )
+        view_state = self._ajax_post(
+            session,
+            query_url,
+            {
+                "AJAXREQUEST": "_viewRoot",
+                "consultarnfseForm": "consultarnfseForm",
+                "consultarnfseForm:opTipoRelatorio": "1",
+                "consultarnfseForm:numNfse": "",
+                "javax.faces.ViewState": view_state,
+                "ajaxSingle": "consultarnfseForm:numero_doc_tab_id",
+                "consultarnfseForm:j_id184": "consultarnfseForm:j_id184",
+                "AJAX:EVENTS_COUNT": "1",
+            },
+            view_state,
+        )
+        view_state = self._ajax_post(
+            session,
+            query_url,
+            {
+                "AJAXREQUEST": "_viewRoot",
+                "consultarnfseForm": "consultarnfseForm",
+                "consultarnfseForm:opTipoRelatorio": "1",
+                "consultarnfseForm:numNfse": "",
+                "javax.faces.ViewState": view_state,
+                "consultarnfseForm:numero_doc_tab_id": "consultarnfseForm:numero_doc_tab_id",
+                "AJAX:EVENTS_COUNT": "1",
+            },
+            view_state,
+        )
+
+        response = self._request_post(
+            session,
+            query_url,
+            self._number_query_payload(numero_nfse, view_state),
+            ajax=True,
+        )
+        current_text = unescape(response.text)
+        self._raise_for_portal_messages(current_text)
+        current_view_state = _extract_view_state(current_text, default=view_state)
+        row_indexes = _extract_xml_row_indexes(current_text)
+        if not row_indexes:
+            debug = self._save_http_artifact("consulta_numero_sem_xml", current_text)
+            raise PeriodWithoutInvoicesError(
+                f"NFS-e {numero_nfse} nao encontrada para o CNPJ {cnpj}. Debug salvo em {debug}"
+            )
+
+        downloaded: list[Path] = []
+        prefix = _nfse_download_prefix(numero_nfse, cnpj, inscricao)
+        for position, row_index in enumerate(row_indexes, start=1):
+            suffix = "" if len(row_indexes) == 1 else f"-n{position:03d}"
+            downloaded.append(
+                self._download_xml_with_requests(
+                    session,
+                    query_url,
+                    current_view_state,
+                    row_index,
+                    f"{prefix}{suffix}.xml",
+                    self._number_form_payload(numero_nfse, current_view_state),
+                )
+            )
+
+        if len(downloaded) == 1:
+            return downloaded[0]
+        return self._zip_downloads(downloaded, f"{prefix}.zip")
 
     def _ajax_post(
         self,
@@ -325,16 +438,41 @@ class PortalClient:
             "javax.faces.ViewState": view_state,
         }
 
+    def _number_query_payload(self, numero_nfse: str, view_state: str) -> dict[str, str]:
+        return {
+            "AJAXREQUEST": "_viewRoot",
+            "consultarnfseForm": "consultarnfseForm",
+            "consultarnfseForm:opTipoRelatorio": "1",
+            "consultarnfseForm:numNfse": numero_nfse,
+            "javax.faces.ViewState": view_state,
+            "consultarnfseForm:j_id237": "consultarnfseForm:j_id237",
+            "AJAX:EVENTS_COUNT": "1",
+        }
+
+    def _number_form_payload(self, numero_nfse: str, view_state: str) -> dict[str, str]:
+        return {
+            "consultarnfseForm": "consultarnfseForm",
+            "consultarnfseForm:opTipoRelatorio": "1",
+            "consultarnfseForm:numNfse": numero_nfse,
+            "consultarnfseForm:j_id237": "Consultar",
+            "consultarnfseForm:j_id238": "Limpar",
+            "consultarnfseForm:j_id323": "Exportar XLS do Resultado da Consulta",
+            "consultarnfseForm:j_id324": "Selecionar todas da página atual",
+            "consultarnfseForm:j_id325": "Exportar XML das Notas Selecionadas",
+            "javax.faces.ViewState": view_state,
+        }
+
     def _download_xml_with_requests(
         self,
         session: Session,
         url: str,
-        competencia: QueryPeriod,
         view_state: str,
         row_index: str,
         fallback_name: str,
+        form_payload: dict[str, str],
     ) -> Path:
-        payload = self._form_payload(competencia, view_state)
+        payload = dict(form_payload)
+        payload["javax.faces.ViewState"] = view_state
         payload[f"consultarnfseForm:dataTable:{row_index}:j_id374"] = ""
         response = self._request_post(session, url, payload, ajax=False)
         content = response.content
@@ -605,6 +743,16 @@ def _select_inscricao_row(
     return rows[0]
 
 
+def _find_inscricao_by_cnpj(rows: list[InscricaoRow], cnpj: str) -> InscricaoRow:
+    expected = _digits(cnpj)
+    for row in rows:
+        if _digits(row.documento) == expected:
+            return row
+    raise InscricaoNotFoundError(
+        f"CNPJ {cnpj} nao encontrado entre as inscricoes disponiveis para o usuario autenticado."
+    )
+
+
 def _strip_tags(value: str) -> str:
     return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", value)).strip()
 
@@ -624,6 +772,14 @@ def _download_prefix(competencia: QueryPeriod, inscricao: InscricaoRow | None) -
     inscricao_id = _digits(inscricao.inscricao) or inscricao.index
     cnpj_id = _digits(inscricao.documento)
     return f"{prefix}-insc-{inscricao_id}-doc-{cnpj_id}"
+
+
+def _nfse_download_prefix(numero_nfse: str, cnpj: str, inscricao: InscricaoRow | None) -> str:
+    prefix = f"NF-consulta-numero-{_digits(numero_nfse)}-doc-{_digits(cnpj)}"
+    if inscricao is None:
+        return prefix
+    inscricao_id = _digits(inscricao.inscricao) or inscricao.index
+    return f"{prefix}-insc-{inscricao_id}"
 
 
 def _with_cid(url: str, source_url: str) -> str:
