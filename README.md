@@ -147,8 +147,10 @@ astro dev stop
 Use `astro dev kill` somente quando também quiser remover containers e
 metadados locais do Airflow.
 
-PDFs, XMLs e diagnósticos persistem em `data/`, montado em
-`/usr/local/airflow/data`.
+PDFs, XMLs e diagnósticos persistem no volume Docker nomeado `nfse_data`,
+montado em `/usr/local/airflow/data`. O volume preserva a propriedade do
+usuário `astro` e evita erros de permissão causados por UIDs diferentes entre
+host e container.
 
 ### Conexão PostgreSQL e pool
 
@@ -165,6 +167,14 @@ astro dev object import
 Também é possível definir a conexão pela variável
 `AIRFLOW_CONN_POSTGRES_PRONTOCARDIO`. Variáveis de ambiente têm precedência
 sobre conexões importadas no banco de metadados do Airflow.
+
+Em ambiente local, prefira preencher essa variável no `.env`: assim a conexão
+já estará disponível quando os containers iniciarem. A DAG de emissão também
+possui a etapa `aguardar_postgres`, que tolera o pequeno intervalo entre a
+subida do Airflow e a importação de `airflow_settings.yaml`. Somente essa
+verificação pode ser repetida; a etapa `processar_lote` permanece sem retry
+automático para não correr o risco de emitir a mesma nota novamente após uma
+falha ocorrida no portal.
 
 O pool `nfse_portal` possui um slot e serializa o acesso ao portal. Em um
 deployment Astro, armazene conexão e credenciais no painel ou em um secret

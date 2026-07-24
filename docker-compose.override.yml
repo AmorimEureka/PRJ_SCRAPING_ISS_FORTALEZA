@@ -1,12 +1,15 @@
 services:
   webserver:
     volumes:
-      - ./data:/usr/local/airflow/data
+      - nfse_data:/usr/local/airflow/data
 
   scheduler:
     volumes:
-      - ./data:/usr/local/airflow/data
+      - nfse_data:/usr/local/airflow/data
 
   triggerer:
     volumes:
-      - ./data:/usr/local/airflow/data
+      - nfse_data:/usr/local/airflow/data
+
+volumes:
+  nfse_data:

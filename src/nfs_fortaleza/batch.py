@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -12,6 +13,7 @@ from nfs_fortaleza.spreadsheet import InvoiceSpreadsheetRow, select_rows
 
 LOCAL_TIME_SQL = "timezone('America/Sao_Paulo', now())"
 VALID_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+PDF_MIME_TYPE = "application/pdf"
 
 
 class BatchConfigurationError(ValueError):
@@ -20,6 +22,10 @@ class BatchConfigurationError(ValueError):
 
 class BatchDatabaseError(RuntimeError):
     """Raised when the operational batch cannot be found or updated."""
+
+
+class BatchArtifactError(RuntimeError):
+    """Raised when an issuance artifact cannot be safely persisted."""
 
 
 @dataclass(frozen=True)
@@ -355,13 +361,41 @@ class PostgresIssuanceRepository:
         result: IssuanceResult,
         dag_run_id: str,
     ) -> None:
+        public_pdf_name, pdf_content, pdf_sha256 = _read_pdf_artifact(result)
         protocol = getattr(result, "protocolo", None)
         observation = _limit(
             f"NFS-e {result.numero_nfse} emitida. "
-            f"dag_run_id={dag_run_id}; pdf={result.pdf_path}",
+            f"dag_run_id={dag_run_id}; pdf={public_pdf_name}",
             500,
         )
         statements = [
+            (
+                f"""
+                INSERT INTO {self._table("emissao_nfse_arquivo")} (
+                    emissao_nfse_id,
+                    nome_arquivo,
+                    tipo_mime,
+                    conteudo,
+                    tamanho_bytes,
+                    sha256
+                ) VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT (emissao_nfse_id) DO UPDATE
+                   SET nome_arquivo = EXCLUDED.nome_arquivo,
+                       tipo_mime = EXCLUDED.tipo_mime,
+                       conteudo = EXCLUDED.conteudo,
+                       tamanho_bytes = EXCLUDED.tamanho_bytes,
+                       sha256 = EXCLUDED.sha256,
+                       data_atualizacao = {LOCAL_TIME_SQL}
+                """,
+                (
+                    item.emissao_id,
+                    public_pdf_name,
+                    PDF_MIME_TYPE,
+                    pdf_content,
+                    len(pdf_content),
+                    pdf_sha256,
+                ),
+            ),
             (
                 f"""
                 UPDATE {self._table("emissao_nfse")}
@@ -658,6 +692,29 @@ def _date_text(value: Any) -> str:
     if isinstance(value, (date, datetime)):
         return value.isoformat()
     return _text(value)
+
+
+def _read_pdf_artifact(result: IssuanceResult) -> tuple[str, bytes, str]:
+    numero_nfse = _text(result.numero_nfse)
+    if not numero_nfse or not numero_nfse.isdigit():
+        raise BatchArtifactError(
+            "Numero da NFS-e invalido para persistencia do PDF."
+        )
+
+    try:
+        content = result.pdf_path.read_bytes()
+    except OSError as exc:
+        raise BatchArtifactError(
+            f"Nao foi possivel ler o PDF da NFS-e {numero_nfse}."
+        ) from exc
+
+    if not content.startswith(b"%PDF"):
+        raise BatchArtifactError(
+            f"O arquivo da NFS-e {numero_nfse} nao e um PDF valido."
+        )
+
+    public_name = f"nfse-{numero_nfse}.pdf"
+    return public_name, content, hashlib.sha256(content).hexdigest()
 
 
 def _error_text(error: Exception) -> str:
