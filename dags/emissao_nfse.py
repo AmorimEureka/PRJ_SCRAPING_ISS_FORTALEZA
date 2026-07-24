@@ -49,6 +49,24 @@ ARTIFACTS_DIR = Path(
     tags=["nfse", "emissao"],
 )
 def emissao_nfse():
+    @task(
+        task_id="aguardar_postgres",
+        retries=4,
+        retry_delay=timedelta(seconds=30),
+        execution_timeout=timedelta(minutes=5),
+        do_xcom_push=False,
+    )
+    def aguardar_postgres() -> None:
+        """Espera a conexão ser importada sem repetir uma emissão iniciada."""
+        connection = PostgresHook(
+            postgres_conn_id=POSTGRES_CONN_ID
+        ).get_conn()
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT 1")
+        finally:
+            connection.close()
+
     @task(task_id="processar_lote", pool="nfse_portal")
     def processar_lote() -> dict[str, object]:
         context = get_current_context()
@@ -90,7 +108,8 @@ def emissao_nfse():
             )
         return summary.as_dict()
 
-    processar_lote()
+    postgres_disponivel = aguardar_postgres()
+    postgres_disponivel >> processar_lote()
 
 
 dag = emissao_nfse()

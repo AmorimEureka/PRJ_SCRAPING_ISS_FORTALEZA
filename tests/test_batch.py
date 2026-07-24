@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import hashlib
+import tempfile
 import unittest
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
 
 from nfs_fortaleza.batch import (
+    BatchArtifactError,
     BatchConfigurationError,
     BatchIssuanceService,
     BatchPayload,
@@ -241,6 +244,34 @@ class CapturingConnection:
         return CapturingCursor(self)
 
 
+class TransactionCapturingCursor:
+    def __init__(self, connection):
+        self.connection = connection
+
+    def execute(self, sql, parameters):
+        self.connection.statements.append((sql, parameters))
+
+    @staticmethod
+    def close():
+        return None
+
+
+class TransactionCapturingConnection:
+    def __init__(self):
+        self.statements = []
+        self.commits = 0
+        self.rollbacks = 0
+
+    def cursor(self):
+        return TransactionCapturingCursor(self)
+
+    def commit(self):
+        self.commits += 1
+
+    def rollback(self):
+        self.rollbacks += 1
+
+
 class RepositoryQueryTests(unittest.TestCase):
     def test_database_is_authoritative_for_approval_and_pending_flags(self) -> None:
         connection = CapturingConnection()
@@ -257,6 +288,98 @@ class RepositoryQueryTests(unittest.TestCase):
         self.assertIn("w.status = 'EMISSAO_SOLICITADA'", compact_sql)
         self.assertIn("s.valor_nota AS valor", compact_sql)
         self.assertEqual(connection.parameters, (42, [101, 102]))
+
+    def test_success_upserts_valid_pdf_before_marking_issuance_emitted(self) -> None:
+        pdf_content = b"%PDF-1.7\nconteudo de teste\n%%EOF"
+        with tempfile.TemporaryDirectory() as temp_dir:
+            pdf_path = Path(temp_dir) / "123 - PACIENTE TESTE.pdf"
+            pdf_path.write_bytes(pdf_content)
+            result = IssuanceResult(
+                row_number=10,
+                numero_nfse="123",
+                pdf_path=pdf_path,
+                paciente="PACIENTE TESTE",
+                cpf="15506142315",
+                client_registered=False,
+            )
+            connection = TransactionCapturingConnection()
+            repository = PostgresIssuanceRepository(
+                connection,
+                schema="api_prontocardio",
+            )
+
+            repository.mark_success(
+                pending_item(),
+                result,
+                "api_prontocardio_nfse_lote_5",
+            )
+
+        self.assertEqual(connection.commits, 1)
+        self.assertEqual(connection.rollbacks, 0)
+        self.assertEqual(len(connection.statements), 4)
+
+        artifact_sql, artifact_parameters = connection.statements[0]
+        compact_artifact_sql = " ".join(artifact_sql.split())
+        self.assertIn(
+            'INSERT INTO "api_prontocardio"."emissao_nfse_arquivo"',
+            compact_artifact_sql,
+        )
+        self.assertIn(
+            "ON CONFLICT (emissao_nfse_id) DO UPDATE",
+            compact_artifact_sql,
+        )
+        self.assertIn(
+            "data_atualizacao = timezone('America/Sao_Paulo', now())",
+            compact_artifact_sql,
+        )
+        self.assertEqual(
+            artifact_parameters,
+            (
+                1,
+                "nfse-123.pdf",
+                "application/pdf",
+                pdf_content,
+                len(pdf_content),
+                hashlib.sha256(pdf_content).hexdigest(),
+            ),
+        )
+
+        issuance_sql, _issuance_parameters = connection.statements[1]
+        self.assertIn("SET status = 'EMITIDA'", issuance_sql)
+        _event_sql, event_parameters = connection.statements[3]
+        observation = event_parameters[2]
+        self.assertIn("pdf=nfse-123.pdf", observation)
+        self.assertNotIn("PACIENTE TESTE", observation)
+        self.assertNotIn(str(pdf_path), observation)
+
+    def test_success_rejects_invalid_pdf_before_opening_transaction(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            pdf_path = Path(temp_dir) / "resposta.html"
+            pdf_path.write_bytes(b"<html>erro do portal</html>")
+            result = IssuanceResult(
+                row_number=10,
+                numero_nfse="123",
+                pdf_path=pdf_path,
+                paciente="PACIENTE TESTE",
+                cpf="15506142315",
+                client_registered=False,
+            )
+            connection = TransactionCapturingConnection()
+            repository = PostgresIssuanceRepository(
+                connection,
+                schema="api_prontocardio",
+            )
+
+            with self.assertRaisesRegex(BatchArtifactError, "PDF valido"):
+                repository.mark_success(
+                    pending_item(),
+                    result,
+                    "api_prontocardio_nfse_lote_5",
+                )
+
+        self.assertEqual(connection.statements, [])
+        self.assertEqual(connection.commits, 0)
+        self.assertEqual(connection.rollbacks, 0)
 
 
 if __name__ == "__main__":
