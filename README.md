@@ -91,6 +91,7 @@ Preencha as credenciais e a conexão:
 PORTAL_PREFEITURA_FORTALEZA=https://iss.fortaleza.ce.gov.br/grpfor/home.seam
 CPF_LOGIN=CPF_USADO_NO_LOGIN
 SENHA='SENHA_DO_PORTAL'
+# Fallback apenas para disparos legados; a DAG usa o CNPJ de cada emissão.
 NFSE_ISSUER_CNPJ=59932105000121
 
 DATABASE_URL=postgresql+psycopg://usuario:senha@host:5432/banco
@@ -98,6 +99,11 @@ POSTGRES_SCHEMA=api_prontocardio
 NFSE_POSTGRES_CONN_ID=postgres_prontocardio
 AIRFLOW_CONN_POSTGRES_PRONTOCARDIO=postgresql://usuario:senha@host:5432/banco
 ```
+
+Nos disparos feitos pela API, `dag_run.conf.cnpj_por_solicitacao`
+transporta o CNPJ emissor de cada item. A DAG confere esse valor com o
+snapshot gravado em `emissao_nfse.cnpj_emissor` e seleciona a inscrição
+correspondente no portal, inclusive quando um lote contém CNPJs diferentes.
 
 Se uma senha contiver `$`, mantenha o valor entre aspas simples para impedir
 a interpolação pelo Docker Compose:
