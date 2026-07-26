@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any, Mapping, Protocol, Sequence
@@ -32,12 +32,14 @@ class BatchArtifactError(RuntimeError):
 class BatchPayload:
     lote_id: int
     solicitacao_ids: tuple[int, ...]
+    cnpj_por_solicitacao: dict[int, str] = field(default_factory=dict)
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any] | None) -> BatchPayload:
         payload = value or {}
         lote_id = payload.get("lote_id")
         solicitacao_ids = payload.get("solicitacao_ids")
+        cnpj_por_solicitacao = payload.get("cnpj_por_solicitacao") or {}
 
         if isinstance(lote_id, bool) or not isinstance(lote_id, int) or lote_id <= 0:
             raise BatchConfigurationError("dag_run.conf.lote_id deve ser um inteiro positivo.")
@@ -56,7 +58,34 @@ class BatchPayload:
             raise BatchConfigurationError(
                 "dag_run.conf.solicitacao_ids nao pode conter IDs repetidos."
             )
-        return cls(lote_id=lote_id, solicitacao_ids=tuple(solicitacao_ids))
+        if not isinstance(cnpj_por_solicitacao, Mapping):
+            raise BatchConfigurationError(
+                "dag_run.conf.cnpj_por_solicitacao deve ser um objeto."
+            )
+        cnpjs_normalizados: dict[int, str] = {}
+        for raw_id, raw_cnpj in cnpj_por_solicitacao.items():
+            try:
+                solicitacao_id = int(raw_id)
+            except (TypeError, ValueError) as exc:
+                raise BatchConfigurationError(
+                    "cnpj_por_solicitacao possui um ID invalido."
+                ) from exc
+            if solicitacao_id not in solicitacao_ids:
+                raise BatchConfigurationError(
+                    "cnpj_por_solicitacao possui um ID fora do lote."
+                )
+            cnpjs_normalizados[solicitacao_id] = _issuer_cnpj(raw_cnpj)
+        if cnpjs_normalizados and set(cnpjs_normalizados) != set(
+            solicitacao_ids
+        ):
+            raise BatchConfigurationError(
+                "cnpj_por_solicitacao deve informar o CNPJ de todos os itens."
+            )
+        return cls(
+            lote_id=lote_id,
+            solicitacao_ids=tuple(solicitacao_ids),
+            cnpj_por_solicitacao=cnpjs_normalizados,
+        )
 
 
 @dataclass(frozen=True)
@@ -65,6 +94,7 @@ class PendingIssuance:
     lote_id: int
     solicitacao_id: int
     usuario_id: int
+    cnpj_emissor: str
     paciente: str
     local: str
     tipo_atendimento: str
@@ -196,17 +226,15 @@ class BatchIssuanceService:
         repository: IssuanceRepository,
         issuer: Issuer,
         *,
-        cnpj: str,
+        cnpj: str | None = None,
         default_city: str = "FORTALEZA",
         default_uf: str = "CE",
     ) -> None:
         self.repository = repository
         self.issuer = issuer
-        self.cnpj = re.sub(r"\D", "", cnpj)
+        self.cnpj = _issuer_cnpj(cnpj) if _text(cnpj) else ""
         self.default_city = default_city
         self.default_uf = default_uf
-        if len(self.cnpj) != 14:
-            raise BatchConfigurationError("O CNPJ emissor deve conter 14 digitos.")
 
     def run(self, payload: BatchPayload, *, dag_run_id: str) -> BatchRunSummary:
         batch_status = self.repository.start_run(payload.lote_id, dag_run_id)
@@ -237,7 +265,10 @@ class BatchIssuanceService:
                         default_city=self.default_city,
                         default_uf=self.default_uf,
                     )
-                    result = self.issuer.issue(row, cnpj=self.cnpj)
+                    result = self.issuer.issue(
+                        row,
+                        cnpj=self._resolve_cnpj(item, payload),
+                    )
                 except Exception as exc:
                     failed += 1
                     self.repository.mark_failure(
@@ -265,6 +296,32 @@ class BatchIssuanceService:
                 _error_text(exc),
             )
             raise
+
+    def _resolve_cnpj(
+        self,
+        item: PendingIssuance,
+        payload: BatchPayload,
+    ) -> str:
+        cnpj_banco = (
+            _issuer_cnpj(item.cnpj_emissor)
+            if _text(item.cnpj_emissor)
+            else ""
+        )
+        cnpj_payload = payload.cnpj_por_solicitacao.get(
+            item.solicitacao_id,
+            "",
+        )
+        if cnpj_banco and cnpj_payload and cnpj_banco != cnpj_payload:
+            raise BatchConfigurationError(
+                "O CNPJ emissor recebido diverge do registro da emissao."
+            )
+        cnpj = cnpj_banco or cnpj_payload or self.cnpj
+        if not cnpj:
+            raise BatchConfigurationError(
+                f"CNPJ emissor nao informado para a solicitacao "
+                f"#{item.solicitacao_id}."
+            )
+        return cnpj
 
 
 class PostgresIssuanceRepository:
@@ -308,6 +365,10 @@ class PostgresIssuanceRepository:
                 e.lote_id,
                 e.solicitacao_nota_id AS solicitacao_id,
                 e.usuario_id,
+                COALESCE(
+                    NULLIF(e.cnpj_emissor, ''),
+                    NULLIF(s.cnpj_emissor, '')
+                ) AS cnpj_emissor,
                 s.nm_paciente AS paciente,
                 s.local,
                 s.tipo_atendimento,
@@ -663,6 +724,15 @@ class PostgresIssuanceRepository:
 
 def _text(value: Any) -> str:
     return re.sub(r"\s+", " ", str(value or "")).strip()
+
+
+def _issuer_cnpj(value: Any) -> str:
+    cnpj = re.sub(r"\D", "", _text(value))
+    if len(cnpj) != 14:
+        raise BatchConfigurationError(
+            "O CNPJ emissor deve conter 14 digitos."
+        )
+    return cnpj
 
 
 def _money(value: Any, solicitacao_id: int) -> Decimal:

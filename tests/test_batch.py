@@ -24,12 +24,14 @@ def pending_item(
     emissao_id: int = 1,
     solicitacao_id: int = 10,
     valor: object = "60,75",
+    cnpj_emissor: str = "05613278000158",
 ) -> PendingIssuance:
     return PendingIssuance(
         emissao_id=emissao_id,
         lote_id=5,
         solicitacao_id=solicitacao_id,
         usuario_id=9,
+        cnpj_emissor=cnpj_emissor,
         paciente="PACIENTE TESTE",
         local="CLINICA 2",
         tipo_atendimento="AMBULATORIO",
@@ -50,11 +52,25 @@ def pending_item(
 class BatchPayloadTests(unittest.TestCase):
     def test_accepts_api_contract(self) -> None:
         payload = BatchPayload.from_mapping(
-            {"lote_id": 42, "solicitacao_ids": [101, 102]}
+            {
+                "lote_id": 42,
+                "solicitacao_ids": [101, 102],
+                "cnpj_por_solicitacao": {
+                    "101": "05613278000158",
+                    "102": "08711085000128",
+                },
+            }
         )
 
         self.assertEqual(payload.lote_id, 42)
         self.assertEqual(payload.solicitacao_ids, (101, 102))
+        self.assertEqual(
+            payload.cnpj_por_solicitacao,
+            {
+                101: "05613278000158",
+                102: "08711085000128",
+            },
+        )
 
     def test_rejects_duplicate_ids(self) -> None:
         with self.assertRaises(BatchConfigurationError):
@@ -138,9 +154,11 @@ class FakeIssuer:
     def __init__(self, *, fail_request_id: int | None = None):
         self.fail_request_id = fail_request_id
         self.rows: list[int] = []
+        self.cnpjs: list[str] = []
 
     def issue(self, row, *, cnpj):
         self.rows.append(row.row_number)
+        self.cnpjs.append(cnpj)
         if row.row_number == self.fail_request_id:
             raise RuntimeError("portal indisponivel")
         return IssuanceResult(
@@ -158,7 +176,11 @@ class BatchServiceTests(unittest.TestCase):
         repository = FakeRepository(
             [
                 pending_item(emissao_id=1, solicitacao_id=10),
-                pending_item(emissao_id=2, solicitacao_id=20),
+                pending_item(
+                    emissao_id=2,
+                    solicitacao_id=20,
+                    cnpj_emissor="08711085000128",
+                ),
             ]
         )
         issuer = FakeIssuer(fail_request_id=20)
@@ -176,6 +198,10 @@ class BatchServiceTests(unittest.TestCase):
         self.assertEqual(repository.claimed, [1, 2])
         self.assertEqual(repository.successes, [1])
         self.assertEqual(repository.failures, [2])
+        self.assertEqual(
+            issuer.cnpjs,
+            ["05613278000158", "08711085000128"],
+        )
         self.assertEqual(summary.emitted, 1)
         self.assertEqual(summary.failed, 1)
         self.assertTrue(summary.incomplete)
@@ -207,6 +233,7 @@ class CapturingCursor:
         ("lote_id",),
         ("solicitacao_id",),
         ("usuario_id",),
+        ("cnpj_emissor",),
         ("paciente",),
         ("local",),
         ("tipo_atendimento",),
@@ -287,6 +314,7 @@ class RepositoryQueryTests(unittest.TestCase):
         self.assertIn("w.validacao = 'VALIDADA'", compact_sql)
         self.assertIn("w.status = 'EMISSAO_SOLICITADA'", compact_sql)
         self.assertIn("s.valor_nota AS valor", compact_sql)
+        self.assertIn("e.cnpj_emissor", compact_sql)
         self.assertEqual(connection.parameters, (42, [101, 102]))
 
     def test_success_upserts_valid_pdf_before_marking_issuance_emitted(self) -> None:
