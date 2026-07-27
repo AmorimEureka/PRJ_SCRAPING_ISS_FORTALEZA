@@ -19,6 +19,7 @@ from nfs_fortaleza.issuance import (
 )
 from nfs_fortaleza.spreadsheet import (
     InvoiceSpreadsheetRow,
+    _cell_multiline_text,
     is_valid_cpf,
     load_invoice_rows,
     select_rows,
@@ -60,6 +61,16 @@ class SpreadsheetTests(unittest.TestCase):
         self.assertTrue(is_valid_cpf("155.061.423-15"))
         self.assertFalse(is_valid_cpf("155.061.423-16"))
         self.assertFalse(is_valid_cpf("111.111.111-11"))
+
+    def test_preserves_procedure_lines_from_spreadsheet(self) -> None:
+        self.assertEqual(
+            _cell_multiline_text(
+                "40901106 - ECODOPPLERCARDIOGRAMA\n"
+                "  20102038   -   MONITORIZACAO ARTERIAL  "
+            ),
+            "40901106 - ECODOPPLERCARDIOGRAMA\r\n"
+            "20102038 - MONITORIZACAO ARTERIAL",
+        )
 
     def test_requires_explicit_row_or_all(self) -> None:
         with self.assertRaises(ValueError):

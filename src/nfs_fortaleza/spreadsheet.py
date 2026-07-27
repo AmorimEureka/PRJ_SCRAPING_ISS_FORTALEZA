@@ -165,7 +165,7 @@ def _build_row(
         bairro=_cell_text(cell("BAIRRO")),
         cidade=_cell_text(cell("CIDADE")),
         uf=_cell_text(cell("UF")),
-        tipo_exame=_cell_text(cell("TIPO DE EXAME")),
+        tipo_exame=_cell_multiline_text(cell("TIPO DE EXAME")),
         data=_cell_text(cell("DATA")),
         email=_cell_text(cell("EMAIL")),
     )
@@ -205,6 +205,18 @@ def _cell_text(value: Any) -> str:
     if isinstance(value, float) and value.is_integer():
         return str(int(value))
     return re.sub(r"\s+", " ", str(value)).strip()
+
+
+def _cell_multiline_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    lines = (
+        re.sub(r"[^\S\r\n]+", " ", line).strip()
+        for line in str(value).splitlines()
+    )
+    return "\r\n".join(line for line in lines if line)
 
 
 def _decimal_value(value: Any, row_number: int) -> Decimal:
