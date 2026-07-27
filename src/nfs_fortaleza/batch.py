@@ -129,7 +129,7 @@ class PendingIssuance:
             bairro=_text(self.bairro),
             cidade=_text(self.cidade) or default_city,
             uf=(_text(self.uf) or default_uf).upper(),
-            tipo_exame=_text(self.tipo_exame),
+            tipo_exame=_multiline_text(self.tipo_exame),
             data=_date_text(self.data),
             email=_text(self.email),
         )
@@ -724,6 +724,14 @@ class PostgresIssuanceRepository:
 
 def _text(value: Any) -> str:
     return re.sub(r"\s+", " ", str(value or "")).strip()
+
+
+def _multiline_text(value: Any) -> str:
+    lines = (
+        re.sub(r"[^\S\r\n]+", " ", line).strip()
+        for line in str(value or "").splitlines()
+    )
+    return "\r\n".join(line for line in lines if line)
 
 
 def _issuer_cnpj(value: Any) -> str:

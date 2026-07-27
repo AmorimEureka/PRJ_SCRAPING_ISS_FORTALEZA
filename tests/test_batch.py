@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import tempfile
 import unittest
+from dataclasses import replace
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
@@ -90,6 +91,25 @@ class BatchPayloadTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "valor do servico"):
             pending_item(valor=None).invoice_row()
+
+    def test_preserves_each_procedure_on_its_own_line(self) -> None:
+        item = replace(
+            pending_item(),
+            tipo_exame=(
+                "40901106 - ECODOPPLERCARDIOGRAMA\n"
+                "  20102038   -   MONITORIZACAO ARTERIAL  \n\n"
+                "40302580 - UREIA, DOSAGEM"
+            ),
+        )
+
+        row = item.invoice_row()
+
+        self.assertEqual(
+            row.tipo_exame,
+            "40901106 - ECODOPPLERCARDIOGRAMA\r\n"
+            "20102038 - MONITORIZACAO ARTERIAL\r\n"
+            "40302580 - UREIA, DOSAGEM",
+        )
 
 
 class FakeRepository:
