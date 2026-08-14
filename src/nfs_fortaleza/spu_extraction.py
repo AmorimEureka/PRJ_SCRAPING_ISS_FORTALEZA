@@ -589,6 +589,7 @@ def extract_and_load_tramitando_reports(
                             "interpretáveis."
                         )
                     _enrich_tramitando_report_rows(settings, rows)
+                    _complete_competencia_unica_processo(rows)
                     linhas_sem_competencia = sum(
                         row.get("competencia") is None for row in rows
                     )
@@ -706,11 +707,18 @@ def _enrich_tramitando_report_rows(
             candidates = cursor.fetchall()
 
     for row in rows:
-        same_remessa_value = [
+        same_remessa = [
             candidate
             for candidate in candidates
             if int(candidate[0]) == int(row["cd_remessa"])
-            and candidate[6] is not None
+        ]
+        competencia_remessa = _competencia_unica_remessa(same_remessa)
+        if row.get("competencia") is None and competencia_remessa is not None:
+            row["competencia"] = competencia_remessa
+        same_remessa_value = [
+            candidate
+            for candidate in same_remessa
+            if candidate[6] is not None
             and Decimal(candidate[6]) == Decimal(row["valor"])
         ]
         patient_key = _match_key(str(row.get("nome_paciente") or ""))
@@ -742,6 +750,29 @@ def _match_key(value: str) -> str:
         char for char in normalized if not unicodedata.combining(char)
     )
     return re.sub(r"\s+", " ", without_marks).strip().upper()
+
+
+def _competencia_unica_remessa(candidates: list[tuple[Any, ...]]):
+    competencias = {
+        candidate[5] for candidate in candidates if candidate[5] is not None
+    }
+    return next(iter(competencias)) if len(competencias) == 1 else None
+
+
+def _complete_competencia_unica_processo(
+    rows: list[dict[str, Any]],
+) -> None:
+    competencias = {
+        row["competencia"]
+        for row in rows
+        if row.get("competencia") is not None
+    }
+    if len(competencias) != 1:
+        return
+    competencia = next(iter(competencias))
+    for row in rows:
+        if row.get("competencia") is None:
+            row["competencia"] = competencia
 
 
 def _spu_pipeline(settings: SpuSettings):
