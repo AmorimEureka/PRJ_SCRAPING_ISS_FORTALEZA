@@ -109,7 +109,13 @@ def renew_spu_session(
         "locale": "pt-BR",
         "timezone_id": "America/Fortaleza",
         "no_viewport": True,
-        "args": ["--start-maximized"],
+        "args": [
+            "--kiosk",
+            "--start-maximized",
+            "--window-position=0,0",
+            "--window-size=1600,900",
+            "--no-xshm",
+        ],
         "ignore_default_args": ["--enable-automation"],
     }
     executable = (
