@@ -1043,20 +1043,33 @@ executada novamente na mesma tarefa.
 
 O `docker-compose.override.yml` executa um desktop virtual Xvfb em um sidecar
 separado, protegido por senha VNC, e compartilha somente o socket X11 com o
-scheduler. O noVNC escuta exclusivamente em `127.0.0.1` no servidor: sua porta
-não fica exposta na rede. Para acompanhar a renovação em produção, abra um
-túnel SSH na estação autorizada:
+scheduler. Quando a tela de login é detectada, a tarefa publica um estado
+temporário com identificador e validade do desafio. O frontend do Receita
+Certa consulta esse estado e abre automaticamente um modal com o navegador do
+SPU. A senha VNC é fornecida pelo backend e não é solicitada nem exibida ao
+usuário.
+
+Por padrão, o noVNC publica a porta somente em `127.0.0.1` e também fica
+disponível na rede Docker compartilhada `receita_certa_automation`. O acesso
+HTTP e WebSocket é encaminhado pelo frontend, que valida a sessão do Receita
+Certa e a origem da conexão. Quando os projetos estiverem no mesmo host, crie
+essa rede uma vez antes de subir os dois projetos:
 
 ```bash
-ssh -N -L 6080:127.0.0.1:6080 usuario@servidor-airflow
+docker network create receita_certa_automation
 ```
 
-Com o túnel ativo, acesse
-`http://localhost:6080/vnc.html?autoconnect=true&resize=scale` e informe
-`SPU_NOVNC_PASSWORD`. A senha VNC deve ter exatamente oito caracteres, limite
-do protocolo usado pelo x11vnc. As credenciais do SPU são usadas apenas para
-preencher os campos no navegador e não são escritas no log, no URL nem em
-arquivos auxiliares.
+Quando Airflow e Receita Certa estiverem em hosts diferentes, configure
+`SPU_NOVNC_BIND_ADDRESS` com o IP privado do servidor Airflow e aponte
+`SPU_NOVNC_INTERNAL_URL` do frontend para esse IP e porta. Restrinja no
+firewall o acesso à porta para o IP privado do servidor do Receita Certa.
+
+Configure o mesmo valor de `RECEITA_CERTA_SPU_NOVNC_PASSWORD`, com exatamente oito
+caracteres, nos `.env` de `prj_web_nfs` e `prj_glosas`. A senha é transportada
+no fragmento local da URL do iframe, que não é enviado ao servidor HTTP, e é
+usada pelo noVNC para conectar automaticamente. As credenciais do SPU são
+usadas apenas para preencher os campos no navegador e não são escritas no log,
+no URL HTTP nem em arquivos auxiliares.
 
 O mesmo fluxo pode ser iniciado manualmente para preparar ou validar o perfil:
 
@@ -1093,8 +1106,11 @@ disponível para ambientes que já provisionem um arquivo Playwright
 | `SPU_BROWSER_HEADLESS` | `true` na DAG |
 | `SPU_AUTO_RENEW_SESSION` | `true`; abre a janela de login quando a sessão expira |
 | `SPU_AUTH_TIMEOUT_SECONDS` | `1800`; tempo para o usuário concluir o login |
-| `SPU_NOVNC_PASSWORD` | senha de exatamente 8 caracteres para o desktop virtual |
-| `SPU_NOVNC_PORT` | `6080`; publicada somente em `127.0.0.1` para túnel SSH |
+| `RECEITA_CERTA_AUTOMATION_NETWORK` | rede Docker externa compartilhada com o frontend; padrão `receita_certa_automation` |
+| `SPU_RECAPTCHA_STATUS_PATH` | estado temporário lido pelo modal; padrão `/tmp/.X11-unix/spu-recaptcha/status.json` |
+| `RECEITA_CERTA_SPU_NOVNC_PASSWORD` | senha interna de exatamente 8 caracteres; use o mesmo valor no Receita Certa |
+| `SPU_NOVNC_BIND_ADDRESS` | bind do noVNC; padrão seguro `127.0.0.1`; em hosts distintos, use o IP privado do Airflow |
+| `SPU_NOVNC_PORT` | porta do noVNC; padrão `6080` |
 | `SPU_NOVNC_SCREEN` | resolução e profundidade; padrão `1600x900x24` |
 | `SPU_PAGE_TIMEOUT_SECONDS` | `90` |
 | `SPU_DOWNLOAD_DELAY_SECONDS` | `0.75` segundo entre downloads; respostas 429 usam retentativa exponencial |

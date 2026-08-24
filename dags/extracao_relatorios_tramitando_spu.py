@@ -30,12 +30,13 @@ POSTGRES_CONN_ID = os.getenv(
 )
 POSTGRES_SCHEMA = os.getenv("POSTGRES_SCHEMA", "api_prontocardio")
 DOWNLOADS_DIR = Path(os.getenv("SPU_DOWNLOADS_DIR", "/usr/local/airflow/data/spu"))
-NOVNC_PORT = os.getenv("SPU_NOVNC_PORT", "6080")
 
 
 def _execute_with_session_renewal(
     settings: SpuSettings,
     operation: Callable[[], T],
+    *,
+    challenge_metadata: dict[str, object] | None = None,
 ) -> T:
     try:
         return operation()
@@ -43,11 +44,14 @@ def _execute_with_session_renewal(
         if not settings.auto_renew_session:
             raise AirflowFailException(str(expired)) from expired
         LOGGER.warning(
-            "Sessão SPU expirada. Renove-a em "
-            f"http://localhost:{NOVNC_PORT}/vnc.html?autoconnect=true&resize=scale."
+            "Sessão SPU expirada. O Receita Certa exibirá o reCAPTCHA em "
+            "um modal para o usuário autenticado."
         )
         try:
-            renew_spu_session(settings)
+            renew_spu_session(
+                settings,
+                challenge_metadata=challenge_metadata,
+            )
         except SpuInteractiveAuthError as auth_error:
             raise AirflowFailException(str(auth_error)) from auth_error
         return operation()
@@ -96,6 +100,11 @@ def extracao_relatorios_tramitando_spu():
                 payload.numero_processos,
                 downloads_dir=DOWNLOADS_DIR / "relatorios_processos",
             ),
+            challenge_metadata={
+                "dag_id": context["task_instance"].dag_id,
+                "run_id": context["dag_run"].run_id,
+                "task_id": context["task_instance"].task_id,
+            },
         )
         return summary.as_dict()
 

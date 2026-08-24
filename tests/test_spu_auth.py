@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import json
+
 from nfs_fortaleza.spu_auth import (
+    _complete_recaptcha_challenge,
     _prefill_login_form,
+    _publish_recaptcha_challenge,
     _wait_for_human_login,
 )
 
@@ -73,3 +77,34 @@ def test_wait_for_human_login_returns_after_leaving_login_page() -> None:
     _wait_for_human_login(page, timeout_seconds=2)  # type: ignore[arg-type]
 
     assert page.url.endswith("/processos/usuario")
+
+
+def test_recaptcha_challenge_is_published_and_completed(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    status_path = tmp_path / "spu" / "status.json"
+    monkeypatch.setenv("SPU_RECAPTCHA_STATUS_PATH", str(status_path))
+
+    challenge_id = _publish_recaptcha_challenge(
+        timeout_seconds=1800,
+        metadata={
+            "dag_id": "extracao_processos_virtuais_spu",
+            "run_id": "scheduled__2026-08-24",
+            "task_id": "carregar_processos",
+        },
+    )
+
+    active = json.loads(status_path.read_text(encoding="utf-8"))
+    assert active["active"] is True
+    assert active["challenge_id"] == challenge_id
+    assert active["dag_id"] == "extracao_processos_virtuais_spu"
+    assert active["task_id"] == "carregar_processos"
+    assert active["expires_at"] > active["started_at"]
+
+    _complete_recaptcha_challenge(challenge_id)
+
+    completed = json.loads(status_path.read_text(encoding="utf-8"))
+    assert completed["active"] is False
+    assert completed["challenge_id"] == challenge_id
+    assert completed["completed_at"]
