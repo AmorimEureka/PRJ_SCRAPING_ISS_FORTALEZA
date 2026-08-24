@@ -85,6 +85,32 @@ def _execute_with_session_renewal(
     ],
 )
 def extracao_relatorios_tramitando_spu():
+    @task(task_id="autenticar_spu", pool="nfse_portal")
+    def autenticar_spu() -> None:
+        context = get_current_context()
+        settings = load_spu_settings()
+        if not settings.auto_renew_session:
+            raise AirflowFailException(
+                "SPU_AUTO_RENEW_SESSION deve estar habilitado para solicitar "
+                "a autenticacao humana no Receita Certa."
+            )
+        LOGGER.warning(
+            "Solicitando uma nova autenticacao humana do SPU para esta "
+            "execucao. O Receita Certa exibira o reCAPTCHA em um modal."
+        )
+        try:
+            renew_spu_session(
+                settings,
+                challenge_metadata={
+                    "dag_id": context["task_instance"].dag_id,
+                    "run_id": context["dag_run"].run_id,
+                    "task_id": context["task_instance"].task_id,
+                },
+                force_login=True,
+            )
+        except SpuInteractiveAuthError as auth_error:
+            raise AirflowFailException(str(auth_error)) from auth_error
+
     @task(task_id="extrair_relatorios", pool="nfse_portal")
     def extrair_relatorios() -> dict[str, object]:
         context = get_current_context()
@@ -108,7 +134,9 @@ def extracao_relatorios_tramitando_spu():
         )
         return summary.as_dict()
 
-    extrair_relatorios()
+    autenticacao = autenticar_spu()
+    extracao = extrair_relatorios()
+    autenticacao >> extracao
 
 
 dag = extracao_relatorios_tramitando_spu()

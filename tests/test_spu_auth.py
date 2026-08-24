@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
+
+import pytest
 
 from nfs_fortaleza.spu_auth import (
+    SpuInteractiveAuthError,
     _complete_recaptcha_challenge,
     _prefill_login_form,
     _publish_recaptcha_challenge,
     _wait_for_human_login,
+    renew_spu_session,
 )
 
 
@@ -108,3 +113,68 @@ def test_recaptcha_challenge_is_published_and_completed(
     assert completed["active"] is False
     assert completed["challenge_id"] == challenge_id
     assert completed["completed_at"]
+
+
+def test_forced_renewal_clears_cookies_before_opening_spu(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    events: list[str] = []
+
+    class Page:
+        url = "https://spuvirtual.sepog.fortaleza.ce.gov.br/processos/usuario"
+
+        def goto(self, *_args, **_kwargs):
+            events.append("goto")
+
+        def locator(self, _selector):
+            return FakeLocator(count=0)
+
+    class Context:
+        pages = [Page()]
+
+        def set_default_timeout(self, _timeout):
+            return None
+
+        def clear_cookies(self):
+            events.append("clear_cookies")
+
+        def close(self):
+            return None
+
+    class Chromium:
+        def launch_persistent_context(self, *_args, **_kwargs):
+            return Context()
+
+    class Playwright:
+        chromium = Chromium()
+
+        def stop(self):
+            return None
+
+    class PlaywrightStarter:
+        def start(self):
+            return Playwright()
+
+    monkeypatch.setattr(
+        "nfs_fortaleza.spu_auth._ensure_visible_browser_available",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        "nfs_fortaleza.spu_auth.sync_playwright",
+        lambda: PlaywrightStarter(),
+    )
+    settings = SimpleNamespace(
+        browser_profile_dir=tmp_path / "profile",
+        auth_timeout_seconds=30,
+        page_timeout_seconds=1,
+        portal_origin="https://spuvirtual.sepog.fortaleza.ce.gov.br",
+        browser_executable_path=None,
+        login="usuario",
+        password="senha",
+    )
+
+    with pytest.raises(SpuInteractiveAuthError, match="sessao anterior"):
+        renew_spu_session(settings, force_login=True)  # type: ignore[arg-type]
+
+    assert events == ["clear_cookies", "goto"]

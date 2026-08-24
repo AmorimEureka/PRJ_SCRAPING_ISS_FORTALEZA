@@ -99,6 +99,7 @@ def renew_spu_session(
     executable_path: str | None = None,
     timeout_seconds: float | None = None,
     challenge_metadata: Mapping[str, object] | None = None,
+    force_login: bool = False,
 ) -> None:
     """Open a visible browser, prefill credentials and wait for human login."""
     _ensure_visible_browser_available()
@@ -146,12 +147,19 @@ def renew_spu_session(
             )
             context.set_default_timeout(settings.page_timeout_seconds * 1000)
             page = context.pages[0] if context.pages else context.new_page()
+            if force_login:
+                context.clear_cookies()
             page.goto(
                 process_url,
                 wait_until="domcontentloaded",
                 timeout=settings.page_timeout_seconds * 1000,
             )
             if not _is_spu_login_page(page):
+                if force_login:
+                    raise SpuInteractiveAuthError(
+                        "Nao foi possivel encerrar a sessao anterior do SPU "
+                        "para solicitar uma nova autenticacao humana."
+                    )
                 LOGGER.info("A sessao persistida do SPU ainda esta valida.")
                 return
 
