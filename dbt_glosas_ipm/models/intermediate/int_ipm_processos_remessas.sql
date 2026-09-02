@@ -68,7 +68,6 @@ with processos as (
      and p.numero_protocolo = manual.numero_protocolo
     join {{ source('oracle_stage', 'ipm_remessas_oracle') }} r
       on r.cd_remessa = manual.cd_remessa
-     and r.competencia = manual.competencia_producao
 )
 select * from automaticos
 union all
