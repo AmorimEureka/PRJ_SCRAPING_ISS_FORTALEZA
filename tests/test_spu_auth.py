@@ -1,8 +1,17 @@
 from __future__ import annotations
 
+import json
+from types import SimpleNamespace
+
+import pytest
+
 from nfs_fortaleza.spu_auth import (
+    SpuInteractiveAuthError,
+    _complete_recaptcha_challenge,
     _prefill_login_form,
+    _publish_recaptcha_challenge,
     _wait_for_human_login,
+    renew_spu_session,
 )
 
 
@@ -73,3 +82,99 @@ def test_wait_for_human_login_returns_after_leaving_login_page() -> None:
     _wait_for_human_login(page, timeout_seconds=2)  # type: ignore[arg-type]
 
     assert page.url.endswith("/processos/usuario")
+
+
+def test_recaptcha_challenge_is_published_and_completed(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    status_path = tmp_path / "spu" / "status.json"
+    monkeypatch.setenv("SPU_RECAPTCHA_STATUS_PATH", str(status_path))
+
+    challenge_id = _publish_recaptcha_challenge(
+        timeout_seconds=1800,
+        metadata={
+            "dag_id": "extracao_processos_virtuais_spu",
+            "run_id": "scheduled__2026-08-24",
+            "task_id": "carregar_processos",
+        },
+    )
+
+    active = json.loads(status_path.read_text(encoding="utf-8"))
+    assert active["active"] is True
+    assert active["challenge_id"] == challenge_id
+    assert active["dag_id"] == "extracao_processos_virtuais_spu"
+    assert active["task_id"] == "carregar_processos"
+    assert active["expires_at"] > active["started_at"]
+
+    _complete_recaptcha_challenge(challenge_id)
+
+    completed = json.loads(status_path.read_text(encoding="utf-8"))
+    assert completed["active"] is False
+    assert completed["challenge_id"] == challenge_id
+    assert completed["completed_at"]
+
+
+def test_forced_renewal_clears_cookies_before_opening_spu(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    events: list[str] = []
+
+    class Page:
+        url = "https://spuvirtual.sepog.fortaleza.ce.gov.br/processos/usuario"
+
+        def goto(self, *_args, **_kwargs):
+            events.append("goto")
+
+        def locator(self, _selector):
+            return FakeLocator(count=0)
+
+    class Context:
+        pages = [Page()]
+
+        def set_default_timeout(self, _timeout):
+            return None
+
+        def clear_cookies(self):
+            events.append("clear_cookies")
+
+        def close(self):
+            return None
+
+    class Chromium:
+        def launch_persistent_context(self, *_args, **_kwargs):
+            return Context()
+
+    class Playwright:
+        chromium = Chromium()
+
+        def stop(self):
+            return None
+
+    class PlaywrightStarter:
+        def start(self):
+            return Playwright()
+
+    monkeypatch.setattr(
+        "nfs_fortaleza.spu_auth._ensure_visible_browser_available",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        "nfs_fortaleza.spu_auth.sync_playwright",
+        lambda: PlaywrightStarter(),
+    )
+    settings = SimpleNamespace(
+        browser_profile_dir=tmp_path / "profile",
+        auth_timeout_seconds=30,
+        page_timeout_seconds=1,
+        portal_origin="https://spuvirtual.sepog.fortaleza.ce.gov.br",
+        browser_executable_path=None,
+        login="usuario",
+        password="senha",
+    )
+
+    with pytest.raises(SpuInteractiveAuthError, match="sessao anterior"):
+        renew_spu_session(settings, force_login=True)  # type: ignore[arg-type]
+
+    assert events == ["clear_cookies", "goto"]

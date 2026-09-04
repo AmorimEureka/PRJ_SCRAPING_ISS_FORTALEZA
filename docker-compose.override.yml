@@ -5,13 +5,19 @@ services:
       dockerfile: docker/novnc/Dockerfile
     environment:
       DISPLAY: ":99"
-      SPU_NOVNC_PASSWORD: "${SPU_NOVNC_PASSWORD:?Defina SPU_NOVNC_PASSWORD no .env}"
+      SPU_NOVNC_PASSWORD: "${RECEITA_CERTA_SPU_NOVNC_PASSWORD:?Defina RECEITA_CERTA_SPU_NOVNC_PASSWORD no .env}"
       SPU_NOVNC_SCREEN: "${SPU_NOVNC_SCREEN:-1600x900x24}"
+      SPU_RECAPTCHA_STATUS_PATH: "/tmp/.X11-unix/spu-recaptcha/status.json"
     ports:
-      - "127.0.0.1:${SPU_NOVNC_PORT:-6080}:6080"
+      - "${SPU_NOVNC_BIND_ADDRESS:-127.0.0.1}:${SPU_NOVNC_PORT:-6080}:6080"
     restart: unless-stopped
     volumes:
       - spu_x11:/tmp/.X11-unix
+    networks:
+      default:
+      receita_certa_automation:
+        aliases:
+          - spu-novnc
 
   webserver:
     volumes:
@@ -23,6 +29,7 @@ services:
         condition: service_healthy
     environment:
       DISPLAY: ":99"
+      SPU_RECAPTCHA_STATUS_PATH: "/tmp/.X11-unix/spu-recaptcha/status.json"
     volumes:
       - nfse_data:/usr/local/airflow/data
       - spu_x11:/tmp/.X11-unix
@@ -34,3 +41,8 @@ services:
 volumes:
   nfse_data:
   spu_x11:
+
+networks:
+  receita_certa_automation:
+    external: true
+    name: "${RECEITA_CERTA_AUTOMATION_NETWORK:-receita_certa_automation}"

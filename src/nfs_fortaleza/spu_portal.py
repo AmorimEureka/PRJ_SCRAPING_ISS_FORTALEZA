@@ -257,30 +257,36 @@ class SpuPortalClient:
         search_input = self._process_search_input(page)
         search_input.fill(numero_processo)
 
-        submitted = search_input.evaluate(
-            r"""
-            (input) => {
-              const form = input.closest('form');
-              const scope = form || input.parentElement?.parentElement || document;
-              const buttons = Array.from(scope.querySelectorAll(
-                'button, input[type="submit"], a.btn'
-              ));
-              const button = buttons.find((item) => {
-                if (item.disabled) return false;
-                const text = (
-                  item.innerText || item.value || item.title ||
-                  item.getAttribute('aria-label') || ''
-                ).replace(/\s+/g, ' ').trim();
-                return /pesquis|buscar|consultar|filtrar/i.test(text);
-              }) || (form ? form.querySelector(
-                'button[type="submit"], input[type="submit"]'
-              ) : null);
-              if (!button) return false;
-              button.click();
-              return true;
-            }
-            """
+        submitted = self._select_process_combobox_option(
+            page,
+            search_input,
+            numero_processo,
         )
+        if not submitted:
+            submitted = search_input.evaluate(
+                r"""
+                (input) => {
+                  const form = input.closest('form');
+                  const scope = form || input.parentElement?.parentElement || document;
+                  const buttons = Array.from(scope.querySelectorAll(
+                    'button, input[type="submit"], a.btn'
+                  ));
+                  const button = buttons.find((item) => {
+                    if (item.disabled) return false;
+                    const text = (
+                      item.innerText || item.value || item.title ||
+                      item.getAttribute('aria-label') || ''
+                    ).replace(/\s+/g, ' ').trim();
+                    return /pesquis|buscar|consultar|filtrar/i.test(text);
+                  }) || (form ? form.querySelector(
+                    'button[type="submit"], input[type="submit"]'
+                  ) : null);
+                  if (!button) return false;
+                  button.click();
+                  return true;
+                }
+                """
+            )
         if not submitted:
             search_input.press("Enter")
 
@@ -298,7 +304,7 @@ class SpuPortalClient:
                       .test(text);
                 }
                 """,
-                numero_processo,
+                arg=numero_processo,
                 timeout=self.settings.page_timeout_seconds * 1000,
             )
         except PlaywrightTimeoutError as exc:
@@ -319,6 +325,32 @@ class SpuPortalClient:
         return None
 
     def _process_search_input(self, page: Page):
+        current_search = page.locator(
+            "[data-react-class='Select/SearchProcesso'] input[type='search']"
+        )
+        for index in range(current_search.count()):
+            item = current_search.nth(index)
+            if item.is_visible() and not item.is_disabled():
+                return item
+
+        search_trigger = page.locator("#step-geral-search")
+        if search_trigger.count():
+            trigger = search_trigger.first
+            if trigger.is_visible():
+                trigger.click()
+                try:
+                    current_search.first.wait_for(
+                        state="visible",
+                        timeout=self.settings.page_timeout_seconds * 1000,
+                    )
+                except PlaywrightTimeoutError as exc:
+                    if self._is_login_page(page):
+                        raise _session_expired_error() from exc
+                for index in range(current_search.count()):
+                    item = current_search.nth(index)
+                    if item.is_visible() and not item.is_disabled():
+                        return item
+
         inputs = page.locator(
             "input:not([type]), input[type='text'], input[type='search']"
         )
@@ -336,6 +368,9 @@ class SpuPortalClient:
                   return [
                     input.id, input.name, input.placeholder,
                     input.getAttribute('aria-label'), label?.innerText,
+                    input.closest('[data-react-class]')
+                      ?.getAttribute('data-react-class'),
+                    input.closest('.col-md-5')?.innerText,
                     input.closest('.form-group')?.innerText,
                     input.parentElement?.innerText
                   ].filter(Boolean).join(' ');
@@ -350,7 +385,9 @@ class SpuPortalClient:
                 score += 4
             if "pesquis" in folded or "busca" in folded:
                 score += 2
-            if score:
+            if "evento" in folded or "situacao" in folded:
+                score -= 10
+            if score > 0:
                 candidates.append((score, index))
         if not candidates:
             raise SpuPortalError(
@@ -358,6 +395,42 @@ class SpuPortalClient:
             )
         _, index = max(candidates)
         return inputs.nth(index)
+
+    def _select_process_combobox_option(
+        self,
+        page: Page,
+        search_input,
+        numero_processo: str,
+    ) -> bool:
+        if search_input.get_attribute("role") != "combobox":
+            return False
+        options = page.locator(".ant-select-item-option")
+        expected = numero_processo.upper().replace("_", "/")
+        try:
+            page.wait_for_function(
+                r"""
+                (number) => Array.from(document.querySelectorAll(
+                  '.ant-select-item-option'
+                )).some((item) => {
+                  const value = (item.innerText || '').trim().toUpperCase()
+                    .replace('_', '/');
+                  return item.offsetParent !== null && value === number;
+                })
+                """,
+                arg=expected,
+                timeout=self.settings.page_timeout_seconds * 1000,
+            )
+        except PlaywrightTimeoutError:
+            return False
+        for index in range(options.count()):
+            option = options.nth(index)
+            if not option.is_visible():
+                continue
+            value = option.inner_text().strip().upper().replace("_", "/")
+            if value == expected:
+                option.click()
+                return True
+        return False
 
     def iter_process_pages(
         self,
