@@ -1,7 +1,29 @@
-with associados_remessa as (
+with contextos_protocolos_contados as (
+    select
+        upper(btrim(numero_protocolo)) as numero_protocolo_normalizado,
+        coalesce(
+            competencia_producao,
+            to_char(data_realizacao, 'MM/YYYY')
+        ) as competencia_producao,
+        min(numero_processo) as numero_processo,
+        min(cd_remessa) as cd_remessa,
+        count(
+            distinct (upper(btrim(numero_processo)), cd_remessa)
+        ) as quantidade_contextos
+    from {{ ref('glosas_ipm_vinculadas') }}
+    where nullif(btrim(numero_protocolo), '') is not null
+      and numero_processo is not null
+      and cd_remessa is not null
+    group by 1, 2
+), contextos_protocolos as (
+    select *
+    from contextos_protocolos_contados
+    where quantidade_contextos = 1
+), associados_remessa as (
     select
         d.*,
-        r.cd_remessa
+        coalesce(r.cd_remessa, contexto.cd_remessa) as cd_remessa,
+        contexto.numero_processo as numero_processo_protocolo
     from {{ ref('stg_demonstrativo_processos_ipm') }} d
     left join {{ ref('int_ipm_processos_remessas') }} r
       on r.numero_processo = d.numero_processo
@@ -9,6 +31,11 @@ with associados_remessa as (
      and r.valor_protocolo
          = round(d.valor_protocolo_cogestao::numeric, 2)
      and r.numero_protocolo = upper(btrim(d.numero_protocolo))
+    left join contextos_protocolos contexto
+      on contexto.numero_protocolo_normalizado
+         = upper(btrim(d.numero_protocolo))
+     and contexto.competencia_producao
+         = to_char(d.data_realizacao, 'MM/YYYY')
 ), primeira_regra_insegura as (
     select id_registro, criterio,
            row_number() over (partition by id_registro order by prioridade) as ordem
@@ -25,8 +52,13 @@ with associados_remessa as (
         d.*,
         i.criterio,
         case
-            when d.status_associacao = 'SEM_PROCESSO' then 'sem_processo'
-            when d.status_associacao = 'AMBIGUO' then 'processo_ambiguo'
+            when coalesce(
+                d.numero_processo,
+                d.numero_processo_protocolo
+            ) is null then 'sem_processo'
+            when d.status_associacao = 'AMBIGUO'
+                 and d.numero_processo_protocolo is null
+                then 'processo_ambiguo'
             when d.cd_remessa is null then 'remessa_nao_encontrada_ou_ambigua'
             when i.criterio is not null then 'ambiguo'
             else 'nao_encontrado'
@@ -39,7 +71,8 @@ with associados_remessa as (
 )
 select
     id_registro,
-    numero_processo,
+    coalesce(numero_processo, numero_processo_protocolo)
+        as numero_processo,
     cd_remessa,
     motivo,
     valor_glosa,
