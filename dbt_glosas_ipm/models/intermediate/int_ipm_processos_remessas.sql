@@ -13,7 +13,30 @@ with processos as (
         upper(btrim(nr)) as numero_protocolo,
         cd_remessa
     from {{ source('prontocardio', 'associacoes_remessas_ipm_manuais') }}
-), candidatos_automaticos as (
+), candidatos_spu as (
+    select distinct
+        p.numero_processo,
+        p.competencia_producao,
+        p.numero_protocolo,
+        p.valor_protocolo,
+        r.cd_remessa,
+        r.nm_convenio,
+        r.cnpj_convenio,
+        round(r.valor_total::numeric, 2) as valor_total_remessa
+    from processos p
+    join {{ ref('stg_processos_relatorios_ipm') }} rel
+      on rel.numero_processo_normalizado = upper(btrim(p.numero_processo))
+    join {{ source('oracle_stage', 'ipm_remessas_oracle') }} r
+      on r.cd_remessa = rel.cd_remessa
+     and round(r.valor_total::numeric, 2) = p.valor_protocolo
+), candidatos_spu_contados as (
+    select candidato.*,
+           count(*) over (
+               partition by numero_processo, competencia_producao,
+                            numero_protocolo, valor_protocolo
+           ) as quantidade_candidatos
+    from candidatos_spu candidato
+), candidatos_valor_competencia as (
     select
         p.numero_processo,
         p.competencia_producao,
@@ -31,9 +54,9 @@ with processos as (
     join {{ source('oracle_stage', 'ipm_remessas_oracle') }} r
       on r.competencia = p.competencia_producao
      and round(r.valor_total::numeric, 2) = p.valor_protocolo
-), automaticos as (
-    select candidato.*, 'automatica'::text as origem_associacao
-    from candidatos_automaticos candidato
+), automaticos_spu as (
+    select candidato.*, 'automatica_spu'::text as origem_associacao
+    from candidatos_spu_contados candidato
     where candidato.quantidade_candidatos = 1
       and not exists (
           select 1
@@ -44,6 +67,34 @@ with processos as (
                 = candidato.competencia_producao
             and manual.numero_protocolo = candidato.numero_protocolo
       )
+), automaticos_valor_competencia as (
+    select candidato.*, 'automatica'::text as origem_associacao
+    from candidatos_valor_competencia candidato
+    where candidato.quantidade_candidatos = 1
+      and not exists (
+          select 1
+          from candidatos_spu candidato_spu
+          where upper(btrim(candidato_spu.numero_processo))
+                = upper(btrim(candidato.numero_processo))
+            and candidato_spu.competencia_producao
+                = candidato.competencia_producao
+            and candidato_spu.numero_protocolo
+                = candidato.numero_protocolo
+            and candidato_spu.valor_protocolo = candidato.valor_protocolo
+      )
+      and not exists (
+          select 1
+          from manuais manual
+          where manual.numero_processo_normalizado
+                = upper(btrim(candidato.numero_processo))
+            and manual.competencia_producao
+                = candidato.competencia_producao
+            and manual.numero_protocolo = candidato.numero_protocolo
+      )
+), automaticos as (
+    select * from automaticos_spu
+    union all
+    select * from automaticos_valor_competencia
 ), resolvidos_manuais as (
     select distinct
         p.numero_processo,
@@ -68,7 +119,6 @@ with processos as (
      and p.numero_protocolo = manual.numero_protocolo
     join {{ source('oracle_stage', 'ipm_remessas_oracle') }} r
       on r.cd_remessa = manual.cd_remessa
-     and r.competencia = manual.competencia_producao
 )
 select * from automaticos
 union all
