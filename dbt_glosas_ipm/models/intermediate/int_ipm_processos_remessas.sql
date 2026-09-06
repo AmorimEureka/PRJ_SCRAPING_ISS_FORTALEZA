@@ -84,7 +84,7 @@ with processos_associados as (
         r.cnpj_convenio,
         round(r.valor_total::numeric, 2) as valor_total_remessa
     from processos p
-    join {{ ref('stg_processos_relatorios_ipm') }} rel
+    join relatorios_remessas rel
       on rel.numero_processo_normalizado = upper(btrim(p.numero_processo))
     join {{ source('oracle_stage', 'ipm_remessas_oracle') }} r
       on r.cd_remessa = rel.cd_remessa
