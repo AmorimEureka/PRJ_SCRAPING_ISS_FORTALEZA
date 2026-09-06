@@ -30,6 +30,12 @@ with demonstrativos_legado as (
              2
          )
      and r.numero_protocolo = upper(btrim(d.numero_protocolo))
+), contextos_protocolos as (
+    select distinct
+        upper(btrim(numero_protocolo)) as numero_protocolo,
+        upper(btrim(numero_processo)) as numero_processo_normalizado,
+        cd_remessa
+    from {{ ref('int_ipm_processos_remessas') }}
 ), candidatos_relatorio_brutos as (
     select distinct
            1 as prioridade,
@@ -92,6 +98,21 @@ with demonstrativos_legado as (
            item.cd_pro_fat_normalizado,
            item.cd_tuss_normalizado
        )
+     where not exists (
+               select 1
+               from contextos_protocolos contexto
+               where contexto.numero_protocolo
+                     = upper(btrim(d.numero_protocolo))
+           )
+        or exists (
+               select 1
+               from contextos_protocolos contexto
+               where contexto.numero_protocolo
+                     = upper(btrim(d.numero_protocolo))
+                 and contexto.numero_processo_normalizado
+                     = item.numero_processo_normalizado
+                 and contexto.cd_remessa = item.cd_remessa
+           )
 ), resumo_relatorio as (
     select
         id_registro,
