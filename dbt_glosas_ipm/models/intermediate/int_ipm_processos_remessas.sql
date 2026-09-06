@@ -36,7 +36,7 @@ with processos_associados as (
 ), candidatos_sem_processo as (
     select distinct
         rel.numero_processo,
-        protocolo.competencia_producao,
+        remessa.competencia as competencia_producao,
         protocolo.numero_protocolo,
         protocolo.valor_protocolo,
         remessa.cd_remessa,

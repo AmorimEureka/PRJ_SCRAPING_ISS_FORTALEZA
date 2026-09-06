@@ -26,6 +26,14 @@ def test_protocolo_orfao_prefere_relatorio_mais_recente_da_remessa():
     assert 'where ordem_remessa = 1' in modelo
 
 
+def test_protocolo_orfao_herda_competencia_oficial_da_remessa_mv():
+    modelo = (
+        MODELS / 'intermediate' / 'int_ipm_processos_remessas.sql'
+    ).read_text()
+
+    assert 'remessa.competencia as competencia_producao' in modelo
+
+
 def test_contexto_recuperado_restringe_candidatos_a_remessa_correta():
     modelo = (
         MODELS / 'intermediate' / 'int_ipm_candidatos_sete_regras.sql'
