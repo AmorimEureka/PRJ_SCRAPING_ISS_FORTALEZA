@@ -1,4 +1,4 @@
-with processos as (
+with processos_associados as (
     select distinct
         numero_processo,
         competencia_producao,
@@ -6,6 +6,57 @@ with processos as (
         round(valor_protocolo_cogestao::numeric, 2) as valor_protocolo
     from {{ ref('stg_demonstrativo_processos_ipm') }}
     where status_associacao like 'ASSOCIADO%'
+), protocolos_sem_processo as (
+    select distinct
+        upper(btrim(numero_protocolo)) as numero_protocolo,
+        to_char(data_realizacao, 'MM/YYYY') as competencia_producao,
+        round(valor_protocolo::numeric, 2) as valor_protocolo
+    from {{ ref('stg_demonstrativo_processos_ipm') }}
+    where status_associacao = 'SEM_PROCESSO'
+      and nullif(btrim(numero_protocolo), '') is not null
+      and valor_protocolo is not null
+      and coalesce(valor_glosa_protocolo, 0) > 0
+), relatorios_remessas as (
+    select distinct
+        numero_processo,
+        numero_processo_normalizado,
+        cd_remessa
+    from {{ ref('stg_processos_relatorios_ipm') }}
+    where nullif(btrim(numero_processo), '') is not null
+      and cd_remessa is not null
+), candidatos_sem_processo as (
+    select distinct
+        rel.numero_processo,
+        protocolo.competencia_producao,
+        protocolo.numero_protocolo,
+        protocolo.valor_protocolo,
+        remessa.cd_remessa,
+        remessa.nm_convenio,
+        remessa.cnpj_convenio,
+        round(remessa.valor_total::numeric, 2) as valor_total_remessa,
+        count(*) over (
+            partition by protocolo.numero_protocolo,
+                         protocolo.competencia_producao,
+                         protocolo.valor_protocolo
+        ) as quantidade_candidatos
+    from protocolos_sem_processo protocolo
+    join {{ source('oracle_stage', 'ipm_remessas_oracle') }} remessa
+      on round(remessa.valor_total::numeric, 2)
+         = protocolo.valor_protocolo
+    join relatorios_remessas rel
+      on rel.cd_remessa = remessa.cd_remessa
+), processos_recuperados as (
+    select
+        numero_processo,
+        competencia_producao,
+        numero_protocolo,
+        valor_protocolo
+    from candidatos_sem_processo
+    where quantidade_candidatos = 1
+), processos as (
+    select * from processos_associados
+    union
+    select * from processos_recuperados
 ), manuais as (
     select
         upper(btrim(numero_processo)) as numero_processo_normalizado,

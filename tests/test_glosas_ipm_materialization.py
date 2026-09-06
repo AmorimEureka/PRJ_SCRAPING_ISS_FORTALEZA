@@ -188,4 +188,5 @@ def test_pendencia_herda_contexto_unico_do_mesmo_protocolo():
     assert "ref('glosas_ipm_vinculadas')" in modelo
     assert "where quantidade_contextos = 1" in modelo
     assert "coalesce(r.cd_remessa, contexto.cd_remessa)" in modelo
-    assert "coalesce(numero_processo, numero_processo_protocolo)" in modelo
+    assert "numero_processo_remessa" in modelo
+    assert "numero_processo_protocolo" in modelo
