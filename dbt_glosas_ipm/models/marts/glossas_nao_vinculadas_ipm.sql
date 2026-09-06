@@ -23,13 +23,23 @@ with contextos_protocolos_contados as (
     select
         d.*,
         coalesce(r.cd_remessa, contexto.cd_remessa) as cd_remessa,
+        r.numero_processo as numero_processo_remessa,
         contexto.numero_processo as numero_processo_protocolo
     from {{ ref('stg_demonstrativo_processos_ipm') }} d
     left join {{ ref('int_ipm_processos_remessas') }} r
-      on r.numero_processo = d.numero_processo
-     and r.competencia_producao = d.competencia_producao
+      on (
+            d.numero_processo is null
+            or r.numero_processo = d.numero_processo
+         )
+     and (
+            d.competencia_producao is null
+            or r.competencia_producao = d.competencia_producao
+         )
      and r.valor_protocolo
-         = round(d.valor_protocolo_cogestao::numeric, 2)
+         = round(
+             coalesce(d.valor_protocolo_cogestao, d.valor_protocolo)::numeric,
+             2
+         )
      and r.numero_protocolo = upper(btrim(d.numero_protocolo))
     left join contextos_protocolos contexto
       on contexto.numero_protocolo_normalizado
@@ -54,6 +64,7 @@ with contextos_protocolos_contados as (
         case
             when coalesce(
                 d.numero_processo,
+                d.numero_processo_remessa,
                 d.numero_processo_protocolo
             ) is null then 'sem_processo'
             when d.status_associacao = 'AMBIGUO'
@@ -71,7 +82,11 @@ with contextos_protocolos_contados as (
 )
 select
     id_registro,
-    coalesce(numero_processo, numero_processo_protocolo)
+    coalesce(
+        numero_processo,
+        numero_processo_remessa,
+        numero_processo_protocolo
+    )
         as numero_processo,
     cd_remessa,
     motivo,
