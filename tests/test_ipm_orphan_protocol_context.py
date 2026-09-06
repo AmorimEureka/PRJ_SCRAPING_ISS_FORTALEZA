@@ -55,6 +55,19 @@ def test_contexto_recuperado_restringe_candidatos_a_remessa_correta():
     assert 'i.cd_remessa = d.cd_remessa_esperada' in modelo
 
 
+def test_correspondencia_direta_respeita_contexto_do_protocolo():
+    modelo = (
+        MODELS / 'intermediate' / 'int_ipm_candidatos_sete_regras.sql'
+    ).read_text()
+
+    assert 'contextos_protocolos as (' in modelo
+    trecho = modelo.split('), candidatos_relatorio_brutos as (', 1)[1]
+    trecho = trecho.split('), resumo_relatorio as (', 1)[0]
+    assert 'contexto.numero_processo_normalizado' in trecho
+    assert '= item.numero_processo_normalizado' in trecho
+    assert 'contexto.cd_remessa = item.cd_remessa' in trecho
+
+
 def test_pendencia_usa_processo_recuperado_da_remessa():
     modelo = (
         MODELS / 'marts' / 'glossas_nao_vinculadas_ipm.sql'
