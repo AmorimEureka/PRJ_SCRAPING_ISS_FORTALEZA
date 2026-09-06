@@ -3,9 +3,9 @@ with demonstrativos_legado as (
         d.*,
         r.cd_remessa as cd_remessa_esperada,
         null::bigint as conta_esperada,
-        d.numero_processo as numero_processo_resolvido,
+        r.numero_processo as numero_processo_resolvido,
         20 as prioridade_origem,
-        'cogestao'::text as origem_associacao,
+        r.origem_associacao,
         to_char(d.data_realizacao, 'YYYY-MM') as mes_realizacao,
         upper(btrim(coalesce(d.numero_guia_senha, ''))) as guia_normalizada,
         upper(btrim(coalesce(d.codigo_servico, ''))) as servico_normalizado,
@@ -16,12 +16,20 @@ with demonstrativos_legado as (
         round(coalesce(d.valor_processado, 0)::numeric, 2) as valor_normalizado
     from {{ ref('stg_demonstrativo_processos_ipm') }} d
     join {{ ref('int_ipm_processos_remessas') }} r
-      on r.numero_processo = d.numero_processo
-     and r.competencia_producao = d.competencia_producao
+      on (
+            d.numero_processo is null
+            or r.numero_processo = d.numero_processo
+         )
+     and (
+            d.competencia_producao is null
+            or r.competencia_producao = d.competencia_producao
+         )
      and r.valor_protocolo
-         = round(d.valor_protocolo_cogestao::numeric, 2)
+         = round(
+             coalesce(d.valor_protocolo_cogestao, d.valor_protocolo)::numeric,
+             2
+         )
      and r.numero_protocolo = upper(btrim(d.numero_protocolo))
-    where d.status_associacao like 'ASSOCIADO%'
 ), candidatos_relatorio_brutos as (
     select distinct
            1 as prioridade,
