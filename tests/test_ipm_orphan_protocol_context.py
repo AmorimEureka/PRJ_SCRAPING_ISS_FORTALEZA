@@ -34,6 +34,17 @@ def test_protocolo_orfao_herda_competencia_oficial_da_remessa_mv():
     assert 'remessa.competencia as competencia_producao' in modelo
 
 
+def test_associacao_spu_usa_apenas_contexto_mais_recente_da_remessa():
+    modelo = (
+        MODELS / 'intermediate' / 'int_ipm_processos_remessas.sql'
+    ).read_text()
+
+    trecho = modelo.split('), candidatos_spu as (', 1)[1]
+    trecho = trecho.split('), candidatos_spu_contados as (', 1)[0]
+    assert "join relatorios_remessas rel" in trecho
+    assert "ref('stg_processos_relatorios_ipm')" not in trecho
+
+
 def test_contexto_recuperado_restringe_candidatos_a_remessa_correta():
     modelo = (
         MODELS / 'intermediate' / 'int_ipm_candidatos_sete_regras.sql'
@@ -42,6 +53,19 @@ def test_contexto_recuperado_restringe_candidatos_a_remessa_correta():
     assert 'r.numero_processo as numero_processo_resolvido' in modelo
     assert 'coalesce(d.valor_protocolo_cogestao, d.valor_protocolo)' in modelo
     assert 'i.cd_remessa = d.cd_remessa_esperada' in modelo
+
+
+def test_correspondencia_direta_respeita_contexto_do_protocolo():
+    modelo = (
+        MODELS / 'intermediate' / 'int_ipm_candidatos_sete_regras.sql'
+    ).read_text()
+
+    assert 'contextos_protocolos as (' in modelo
+    trecho = modelo.split('), candidatos_relatorio_brutos as (', 1)[1]
+    trecho = trecho.split('), resumo_relatorio as (', 1)[0]
+    assert 'contexto.numero_processo_normalizado' in trecho
+    assert '= item.numero_processo_normalizado' in trecho
+    assert 'contexto.cd_remessa = item.cd_remessa' in trecho
 
 
 def test_pendencia_usa_processo_recuperado_da_remessa():
