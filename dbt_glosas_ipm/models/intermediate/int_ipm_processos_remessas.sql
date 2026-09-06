@@ -16,14 +16,23 @@ with processos_associados as (
       and nullif(btrim(numero_protocolo), '') is not null
       and valor_protocolo is not null
       and coalesce(valor_glosa_protocolo, 0) > 0
-), relatorios_remessas as (
-    select distinct
+), relatorios_remessas_ordenados as (
+    select
         numero_processo,
         numero_processo_normalizado,
-        cd_remessa
+        cd_remessa,
+        row_number() over (
+            partition by cd_remessa
+            order by extraido_em desc nulls last,
+                     numero_processo_normalizado desc
+        ) as ordem_remessa
     from {{ ref('stg_processos_relatorios_ipm') }}
     where nullif(btrim(numero_processo), '') is not null
       and cd_remessa is not null
+), relatorios_remessas as (
+    select numero_processo, numero_processo_normalizado, cd_remessa
+    from relatorios_remessas_ordenados
+    where ordem_remessa = 1
 ), candidatos_sem_processo as (
     select distinct
         rel.numero_processo,

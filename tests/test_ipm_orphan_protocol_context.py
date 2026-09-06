@@ -16,6 +16,16 @@ def test_protocolo_sem_processo_recupera_contexto_por_remessa_unica():
     assert 'select * from processos_recuperados' in modelo
 
 
+def test_protocolo_orfao_prefere_relatorio_mais_recente_da_remessa():
+    modelo = (
+        MODELS / 'intermediate' / 'int_ipm_processos_remessas.sql'
+    ).read_text()
+
+    assert 'partition by cd_remessa' in modelo
+    assert 'order by extraido_em desc nulls last' in modelo
+    assert 'where ordem_remessa = 1' in modelo
+
+
 def test_contexto_recuperado_restringe_candidatos_a_remessa_correta():
     modelo = (
         MODELS / 'intermediate' / 'int_ipm_candidatos_sete_regras.sql'
