@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 import shutil
@@ -8,8 +9,12 @@ import sys
 import time
 from contextlib import suppress
 from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from tempfile import NamedTemporaryFile
+from typing import Mapping
 from urllib.parse import urlsplit
+from uuid import uuid4
 
 from playwright.sync_api import (
     BrowserContext,
@@ -29,6 +34,9 @@ from nfs_fortaleza.spu_portal import SpuPortalClient, spu_profile_lock
 
 
 LOGGER = logging.getLogger(__name__)
+DEFAULT_RECAPTCHA_STATUS_PATH = Path(
+    "/tmp/.X11-unix/spu-recaptcha/status.json"
+)
 
 
 class SpuInteractiveAuthError(RuntimeError):
@@ -90,6 +98,8 @@ def renew_spu_session(
     profile_dir: Path | None = None,
     executable_path: str | None = None,
     timeout_seconds: float | None = None,
+    challenge_metadata: Mapping[str, object] | None = None,
+    force_login: bool = False,
 ) -> None:
     """Open a visible browser, prefill credentials and wait for human login."""
     _ensure_visible_browser_available()
@@ -129,6 +139,7 @@ def renew_spu_session(
     with spu_profile_lock(profile_dir):
         playwright = sync_playwright().start()
         context: BrowserContext | None = None
+        challenge_id: str | None = None
         try:
             context = playwright.chromium.launch_persistent_context(
                 str(profile_dir),
@@ -136,16 +147,27 @@ def renew_spu_session(
             )
             context.set_default_timeout(settings.page_timeout_seconds * 1000)
             page = context.pages[0] if context.pages else context.new_page()
+            if force_login:
+                context.clear_cookies()
             page.goto(
                 process_url,
                 wait_until="domcontentloaded",
                 timeout=settings.page_timeout_seconds * 1000,
             )
             if not _is_spu_login_page(page):
+                if force_login:
+                    raise SpuInteractiveAuthError(
+                        "Nao foi possivel encerrar a sessao anterior do SPU "
+                        "para solicitar uma nova autenticacao humana."
+                    )
                 LOGGER.info("A sessao persistida do SPU ainda esta valida.")
                 return
 
             _prefill_login_form(page, settings.login, settings.password)
+            challenge_id = _publish_recaptcha_challenge(
+                timeout_seconds=timeout_seconds,
+                metadata=challenge_metadata,
+            )
             page.bring_to_front()
             LOGGER.warning(
                 "Sessao SPU expirada. A janela de login foi aberta com as "
@@ -164,10 +186,71 @@ def renew_spu_session(
                 "Nao foi possivel concluir a renovacao visivel da sessao SPU."
             ) from exc
         finally:
+            if challenge_id is not None:
+                _complete_recaptcha_challenge(challenge_id)
             if context is not None:
                 with suppress(PlaywrightError):
                     context.close()
             playwright.stop()
+
+
+def _publish_recaptcha_challenge(
+    *,
+    timeout_seconds: float,
+    metadata: Mapping[str, object] | None = None,
+) -> str:
+    challenge_id = uuid4().hex
+    started_at = datetime.now(timezone.utc)
+    payload: dict[str, object] = {
+        "active": True,
+        "challenge_id": challenge_id,
+        "started_at": started_at.isoformat(),
+        "expires_at": (
+            started_at + timedelta(seconds=timeout_seconds)
+        ).isoformat(),
+    }
+    for key in ("dag_id", "run_id", "task_id"):
+        value = (metadata or {}).get(key)
+        if value is not None:
+            payload[key] = str(value)
+    _write_recaptcha_status(payload)
+    return challenge_id
+
+
+def _complete_recaptcha_challenge(challenge_id: str) -> None:
+    _write_recaptcha_status(
+        {
+            "active": False,
+            "challenge_id": challenge_id,
+            "completed_at": datetime.now(timezone.utc).isoformat(),
+        }
+    )
+
+
+def _write_recaptcha_status(payload: Mapping[str, object]) -> None:
+    status_path = Path(
+        os.getenv(
+            "SPU_RECAPTCHA_STATUS_PATH",
+            str(DEFAULT_RECAPTCHA_STATUS_PATH),
+        )
+    )
+    try:
+        status_path.parent.mkdir(parents=True, exist_ok=True)
+        with NamedTemporaryFile(
+            "w",
+            dir=status_path.parent,
+            encoding="utf-8",
+            delete=False,
+        ) as temporary:
+            json.dump(payload, temporary, ensure_ascii=False)
+            temporary.write("\n")
+            temporary_path = Path(temporary.name)
+        temporary_path.chmod(0o644)
+        temporary_path.replace(status_path)
+    except OSError as exc:
+        raise SpuInteractiveAuthError(
+            "Nao foi possivel avisar o Receita Certa sobre o reCAPTCHA."
+        ) from exc
 
 
 def _prefill_login_form(page: Page, login: str, password: str) -> None:

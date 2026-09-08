@@ -237,6 +237,123 @@ def test_process_list_reports_expired_session_to_orchestrator() -> None:
     assert not hasattr(client, "_login")
 
 
+def test_process_search_opens_current_portal_panel() -> None:
+    class Element:
+        def __init__(self, visible=False, on_click=None):
+            self.visible = visible
+            self.on_click = on_click
+            self.clicks = 0
+
+        def is_visible(self):
+            return self.visible
+
+        def is_disabled(self):
+            return False
+
+        def click(self):
+            self.clicks += 1
+            if self.on_click:
+                self.on_click()
+
+        def wait_for(self, *, state, timeout):
+            assert state == "visible"
+            assert timeout == 1000
+            assert self.visible
+
+    class Locator:
+        def __init__(self, elements):
+            self.elements = elements
+
+        def count(self):
+            return len(self.elements)
+
+        def nth(self, index):
+            return self.elements[index]
+
+        @property
+        def first(self):
+            return self.elements[0]
+
+    process_input = Element()
+    trigger = Element(
+        visible=True,
+        on_click=lambda: setattr(process_input, "visible", True),
+    )
+
+    class Page:
+        def locator(self, selector):
+            if selector.startswith("[data-react-class="):
+                return Locator([process_input])
+            if selector == "#step-geral-search":
+                return Locator([trigger])
+            return Locator([])
+
+    client = SpuPortalClient(  # type: ignore[arg-type]
+        SimpleNamespace(page_timeout_seconds=1),
+        downloads_dir=Path("."),
+    )
+
+    assert client._process_search_input(Page()) is process_input  # type: ignore[arg-type]
+    assert trigger.clicks == 1
+
+
+def test_process_search_selects_exact_ant_option() -> None:
+    class SearchInput:
+        def get_attribute(self, name):
+            assert name == "role"
+            return "combobox"
+
+    class Option:
+        def __init__(self, text):
+            self.text = text
+            self.clicks = 0
+
+        def is_visible(self):
+            return True
+
+        def inner_text(self):
+            return self.text
+
+        def click(self):
+            self.clicks += 1
+
+    class Locator:
+        def __init__(self, elements):
+            self.elements = elements
+
+        def count(self):
+            return len(self.elements)
+
+        def nth(self, index):
+            return self.elements[index]
+
+    other = Option("P248910/2026")
+    expected = Option("P248911/2026")
+
+    class Page:
+        def locator(self, selector):
+            assert selector == ".ant-select-item-option"
+            return Locator([other, expected])
+
+        def wait_for_function(self, script, *, arg, timeout):
+            assert ".ant-select-item-option" in script
+            assert arg == "P248911/2026"
+            assert timeout == 1000
+
+    client = SpuPortalClient(  # type: ignore[arg-type]
+        SimpleNamespace(page_timeout_seconds=1),
+        downloads_dir=Path("."),
+    )
+
+    assert client._select_process_combobox_option(  # type: ignore[arg-type]
+        Page(),
+        SearchInput(),
+        "P248911_2026",
+    )
+    assert other.clicks == 0
+    assert expected.clicks == 1
+
+
 def test_profile_lock_rejects_simultaneous_browser(tmp_path: Path) -> None:
     profile_dir = tmp_path / "browser_profile"
 

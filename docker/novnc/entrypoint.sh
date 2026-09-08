@@ -14,6 +14,7 @@ x11_socket="/tmp/.X11-unix/X${display_number}"
 x11_lock="/tmp/.X${display_number}-lock"
 runtime_dir=/run/spu-novnc
 passwd_file="$runtime_dir/.vnc/passwd"
+status_path="${SPU_RECAPTCHA_STATUS_PATH:-/tmp/.X11-unix/spu-recaptcha/status.json}"
 websockify_pid=""
 x11vnc_pid=""
 openbox_pid=""
@@ -21,6 +22,8 @@ xvfb_pid=""
 
 mkdir -p "$runtime_dir/.vnc" /tmp/.X11-unix
 chmod 1777 /tmp/.X11-unix
+mkdir -p "$(dirname "$status_path")"
+chmod 0777 "$(dirname "$status_path")"
 
 # O socket fica em um volume compartilhado com o scheduler. Depois que o
 # sidecar é recriado, o volume pode conservar o socket do Xvfb anterior; nesse
@@ -32,6 +35,10 @@ rm -f "$x11_socket" "$x11_lock"
 HOME="$runtime_dir" x11vnc -storepasswd \
     "$SPU_NOVNC_PASSWORD" "$passwd_file" >/dev/null
 unset SPU_NOVNC_PASSWORD
+
+printf '%s\n' '{"active":false}' >"$status_path"
+chmod 0644 "$status_path"
+ln -sf "$status_path" /usr/share/novnc/spu-recaptcha-status.json
 
 Xvfb "$display" -screen 0 "$screen" -ac -nolisten tcp &
 xvfb_pid=$!

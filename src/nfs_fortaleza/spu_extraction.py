@@ -691,7 +691,7 @@ def extract_and_load_process_reports(
     )
     if failures:
         details = "; ".join(f"{number}: {message}" for number, message in failures)
-        if not processed:
+        if not processed and not already_loaded:
             raise SpuBatchExtractionError(
                 "Todos os relatórios de processos falharam: " + details
             )

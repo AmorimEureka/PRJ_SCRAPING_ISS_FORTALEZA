@@ -147,8 +147,6 @@ def test_fallback_nao_associa_beneficiarios_diferentes():
         assert (
             "i.nr_carteira_normalizada = d.carteira_normalizada" in regra
         )
-
-
 def test_fallback_nao_contradiz_guia_quando_ambas_estao_preenchidas():
     modelo = (
         Path(__file__).parents[1]
@@ -174,3 +172,19 @@ def test_fallback_nao_contradiz_guia_quando_ambas_estao_preenchidas():
         )
         regra = modelo.split(inicio, 1)[1].split("union all", 1)[0]
         assert "i.nr_guia_normalizada = d.guia_normalizada" in regra
+
+
+def test_pendencia_herda_contexto_unico_do_mesmo_protocolo():
+    modelo = (
+        Path(__file__).parents[1]
+        / "dbt_glosas_ipm"
+        / "models"
+        / "marts"
+        / "glossas_nao_vinculadas_ipm.sql"
+    ).read_text()
+
+    assert "ref('glosas_ipm_vinculadas')" in modelo
+    assert "where quantidade_contextos = 1" in modelo
+    assert "coalesce(r.cd_remessa, contexto.cd_remessa)" in modelo
+    assert "numero_processo_remessa" in modelo
+    assert "numero_processo_protocolo" in modelo

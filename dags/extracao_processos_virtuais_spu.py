@@ -39,12 +39,13 @@ POSTGRES_SCHEMA = os.getenv("POSTGRES_SCHEMA", "api_prontocardio")
 DOWNLOADS_DIR = Path(
     os.getenv("SPU_DOWNLOADS_DIR", "/usr/local/airflow/data/spu")
 )
-NOVNC_PORT = os.getenv("SPU_NOVNC_PORT", "6080")
 
 
 def _execute_with_session_renewal(
     settings: SpuSettings,
     operation: Callable[[], T],
+    *,
+    challenge_metadata: dict[str, object] | None = None,
 ) -> T:
     try:
         return operation()
@@ -54,13 +55,14 @@ def _execute_with_session_renewal(
 
         LOGGER.warning(
             "Sessao SPU expirada. Abrindo a renovacao interativa no "
-            "navegador visivel do scheduler. Acesse o desktop protegido "
-            "pelo tunel SSH em "
-            f"http://localhost:{NOVNC_PORT}/vnc.html?autoconnect=true"
-            "&resize=scale."
+            "navegador visivel do scheduler. O Receita Certa exibira o "
+            "reCAPTCHA em um modal para o usuario autenticado."
         )
         try:
-            renew_spu_session(settings)
+            renew_spu_session(
+                settings,
+                challenge_metadata=challenge_metadata,
+            )
         except SpuInteractiveAuthError as auth_error:
             raise AirflowFailException(str(auth_error)) from auth_error
 
@@ -95,10 +97,41 @@ def _execute_with_session_renewal(
     tags=["spu", "processos-virtuais", "pdf", "ipm", "dlt"],
 )
 def extracao_processos_virtuais_spu():
+    @task(task_id="autenticar_spu", pool="nfse_portal")
+    def autenticar_spu() -> None:
+        context = get_current_context()
+        settings = load_spu_settings()
+        if not settings.auto_renew_session:
+            raise AirflowFailException(
+                "SPU_AUTO_RENEW_SESSION deve estar habilitado para solicitar "
+                "a autenticacao humana no Receita Certa."
+            )
+        LOGGER.warning(
+            "Solicitando uma nova autenticacao humana do SPU para esta "
+            "execucao. O Receita Certa exibira o reCAPTCHA em um modal."
+        )
+        try:
+            renew_spu_session(
+                settings,
+                challenge_metadata={
+                    "dag_id": context["task_instance"].dag_id,
+                    "run_id": context["dag_run"].run_id,
+                    "task_id": context["task_instance"].task_id,
+                },
+                force_login=True,
+            )
+        except SpuInteractiveAuthError as auth_error:
+            raise AirflowFailException(str(auth_error)) from auth_error
+
     @task(task_id="carregar_processos", pool="nfse_portal")
     def carregar_processos() -> dict[str, object]:
         context = get_current_context()
         payload = SpuExtractionPayload.from_mapping(context["dag_run"].conf)
+        challenge_metadata = {
+            "dag_id": context["task_instance"].dag_id,
+            "run_id": context["dag_run"].run_id,
+            "task_id": context["task_instance"].task_id,
+        }
 
         hook = PostgresHook(postgres_conn_id=POSTGRES_CONN_ID)
         os.environ["DATABASE_URL"] = hook.get_uri()
@@ -111,11 +144,13 @@ def extracao_processos_virtuais_spu():
                 payload,
                 downloads_dir=DOWNLOADS_DIR,
             ),
+            challenge_metadata=challenge_metadata,
         )
         return summary.as_dict()
 
     @task(task_id="processar_pdfs", pool="nfse_portal")
     def processar_pdfs(process_summary: dict[str, object]) -> dict[str, object]:
+        context = get_current_context()
         raw_numbers = process_summary.get("finalizados_para_pdf", [])
         process_numbers = tuple(str(number) for number in raw_numbers)
 
@@ -130,10 +165,18 @@ def extracao_processos_virtuais_spu():
                 process_numbers,
                 downloads_dir=DOWNLOADS_DIR,
             ),
+            challenge_metadata={
+                "dag_id": context["task_instance"].dag_id,
+                "run_id": context["dag_run"].run_id,
+                "task_id": context["task_instance"].task_id,
+            },
         )
         return summary.as_dict()
 
-    processamento = processar_pdfs(carregar_processos())
+    autenticacao = autenticar_spu()
+    carga = carregar_processos()
+    autenticacao >> carga
+    processamento = processar_pdfs(carga)
     relatorios_tramitando = TriggerDagRunOperator(
         task_id="acionar_relatorios_tramitando_spu",
         trigger_dag_id="extracao_relatorios_tramitando_spu",

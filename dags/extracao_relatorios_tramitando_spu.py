@@ -30,12 +30,13 @@ POSTGRES_CONN_ID = os.getenv(
 )
 POSTGRES_SCHEMA = os.getenv("POSTGRES_SCHEMA", "api_prontocardio")
 DOWNLOADS_DIR = Path(os.getenv("SPU_DOWNLOADS_DIR", "/usr/local/airflow/data/spu"))
-NOVNC_PORT = os.getenv("SPU_NOVNC_PORT", "6080")
 
 
 def _execute_with_session_renewal(
     settings: SpuSettings,
     operation: Callable[[], T],
+    *,
+    challenge_metadata: dict[str, object] | None = None,
 ) -> T:
     try:
         return operation()
@@ -43,11 +44,14 @@ def _execute_with_session_renewal(
         if not settings.auto_renew_session:
             raise AirflowFailException(str(expired)) from expired
         LOGGER.warning(
-            "Sessão SPU expirada. Renove-a em "
-            f"http://localhost:{NOVNC_PORT}/vnc.html?autoconnect=true&resize=scale."
+            "Sessão SPU expirada. O Receita Certa exibirá o reCAPTCHA em "
+            "um modal para o usuário autenticado."
         )
         try:
-            renew_spu_session(settings)
+            renew_spu_session(
+                settings,
+                challenge_metadata=challenge_metadata,
+            )
         except SpuInteractiveAuthError as auth_error:
             raise AirflowFailException(str(auth_error)) from auth_error
         return operation()
@@ -81,6 +85,32 @@ def _execute_with_session_renewal(
     ],
 )
 def extracao_relatorios_tramitando_spu():
+    @task(task_id="autenticar_spu", pool="nfse_portal")
+    def autenticar_spu() -> None:
+        context = get_current_context()
+        settings = load_spu_settings()
+        if not settings.auto_renew_session:
+            raise AirflowFailException(
+                "SPU_AUTO_RENEW_SESSION deve estar habilitado para solicitar "
+                "a autenticacao humana no Receita Certa."
+            )
+        LOGGER.warning(
+            "Solicitando uma nova autenticacao humana do SPU para esta "
+            "execucao. O Receita Certa exibira o reCAPTCHA em um modal."
+        )
+        try:
+            renew_spu_session(
+                settings,
+                challenge_metadata={
+                    "dag_id": context["task_instance"].dag_id,
+                    "run_id": context["dag_run"].run_id,
+                    "task_id": context["task_instance"].task_id,
+                },
+                force_login=True,
+            )
+        except SpuInteractiveAuthError as auth_error:
+            raise AirflowFailException(str(auth_error)) from auth_error
+
     @task(task_id="extrair_relatorios", pool="nfse_portal")
     def extrair_relatorios() -> dict[str, object]:
         context = get_current_context()
@@ -96,10 +126,17 @@ def extracao_relatorios_tramitando_spu():
                 payload.numero_processos,
                 downloads_dir=DOWNLOADS_DIR / "relatorios_processos",
             ),
+            challenge_metadata={
+                "dag_id": context["task_instance"].dag_id,
+                "run_id": context["dag_run"].run_id,
+                "task_id": context["task_instance"].task_id,
+            },
         )
         return summary.as_dict()
 
-    extrair_relatorios()
+    autenticacao = autenticar_spu()
+    extracao = extrair_relatorios()
+    autenticacao >> extracao
 
 
 dag = extracao_relatorios_tramitando_spu()
