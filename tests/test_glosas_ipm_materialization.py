@@ -6,6 +6,7 @@ from nfs_fortaleza.glosas_ipm_materialization import (
     MATERIALIZAR_RASTREIO_SQL,
     MATERIALIZAR_REGISTROS_SQL,
     RECONCILIAR_REGISTROS_SQL,
+    REMOVER_RASTREIOS_OBSOLETOS_SQL,
     materializar_registros_glosa,
 )
 
@@ -28,7 +29,7 @@ class CursorFake:
 
 
 class PostgresFake:
-    def __init__(self, rowcounts=(2, 3, 5)):
+    def __init__(self, rowcounts=(2, 7, 3, 5)):
         self.cursor_fake = CursorFake(rowcounts)
         self.commits = 0
         self.rollbacks = 0
@@ -50,11 +51,13 @@ def test_materializa_registros_e_rastreios_em_uma_transacao():
 
     assert postgres.cursor_fake.comandos == [
         RECONCILIAR_REGISTROS_SQL,
+        REMOVER_RASTREIOS_OBSOLETOS_SQL,
         MATERIALIZAR_REGISTROS_SQL,
         MATERIALIZAR_RASTREIO_SQL,
     ]
     assert resultado == {
         "registros_desativados": 2,
+        "rastreios_removidos": 7,
         "registros_glosa": 3,
         "rastreios": 5,
     }
@@ -74,6 +77,7 @@ def test_desfaz_transacao_quando_materializacao_falha():
 
 def test_materializacao_preserva_tratativas_e_e_idempotente():
     reconciliacao = " ".join(RECONCILIAR_REGISTROS_SQL.upper().split())
+    remocao = " ".join(REMOVER_RASTREIOS_OBSOLETOS_SQL.upper().split())
     registros = " ".join(MATERIALIZAR_REGISTROS_SQL.upper().split())
     rastreios = " ".join(MATERIALIZAR_RASTREIO_SQL.upper().split())
 
@@ -86,6 +90,9 @@ def test_materializacao_preserva_tratativas_e_e_idempotente():
     assert "REGISTRO.DT_RECURSO IS NULL" in reconciliacao
     assert "REGISTRO.DT_PAGAMENTO IS NULL" in reconciliacao
     assert "RASTREADOS_VIGENTES" in reconciliacao
+    assert "DELETE FROM" in remocao
+    assert "REGISTRO.ORIGEM_REGISTRO IN ('TRIAGEM', 'CONCILIACAO')" in remocao
+    assert "ATUAL.ID_REGISTRO = RASTREIO.ID_REGISTRO" in remocao
 
 
 def test_materializacao_usa_mesmo_destino_para_ambos_os_status():
