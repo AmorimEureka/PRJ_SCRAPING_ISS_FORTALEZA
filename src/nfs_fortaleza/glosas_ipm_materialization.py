@@ -33,6 +33,19 @@ UPDATE api_prontocardio.registros_glosa AS registro
 """
 
 
+REMOVER_RASTREIOS_OBSOLETOS_SQL = """
+DELETE FROM api_prontocardio.registros_glosa_demonstrativo_ipm AS rastreio
+ USING api_prontocardio.registros_glosa AS registro
+ WHERE registro.id = rastreio.registro_glosa_id
+   AND registro.origem_registro IN ('triagem', 'conciliacao')
+   AND NOT EXISTS (
+       SELECT 1
+         FROM api_prontocardio.glosas_ipm_vinculadas AS atual
+        WHERE atual.id_registro = rastreio.id_registro
+   )
+"""
+
+
 MATERIALIZAR_REGISTROS_SQL = """
 WITH vinculos AS (
     SELECT DISTINCT ON (
@@ -199,6 +212,8 @@ def materializar_registros_glosa(postgres) -> dict[str, int]:
         with postgres.cursor() as cursor:
             cursor.execute(RECONCILIAR_REGISTROS_SQL)
             desativados = max(cursor.rowcount, 0)
+            cursor.execute(REMOVER_RASTREIOS_OBSOLETOS_SQL)
+            rastreios_removidos = max(cursor.rowcount, 0)
             cursor.execute(MATERIALIZAR_REGISTROS_SQL)
             registros = max(cursor.rowcount, 0)
             cursor.execute(MATERIALIZAR_RASTREIO_SQL)
@@ -209,6 +224,7 @@ def materializar_registros_glosa(postgres) -> dict[str, int]:
         raise
     return {
         "registros_desativados": desativados,
+        "rastreios_removidos": rastreios_removidos,
         "registros_glosa": registros,
         "rastreios": rastreios,
     }
